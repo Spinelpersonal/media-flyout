@@ -37,7 +37,7 @@ impl std::fmt::Debug for Artwork {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionInfo {
     pub id: u64,
     pub app_id: String,
@@ -52,6 +52,7 @@ pub struct Snapshot {
     pub track: Track,
     pub state: PlaybackState,
     pub controls: Controls,
+    pub timeline: Option<super::Timeline>,
     pub status: Option<String>,
 }
 
@@ -69,8 +70,12 @@ pub fn select_session(
     let preferred = sessions
         .iter()
         .position(|s| preferred_app.is_some_and(|app| app.eq_ignore_ascii_case(&s.app_id)));
-    preferred
-        .filter(|&i| sessions[i].state == PlaybackState::Playing)
+    sessions
+        .iter()
+        .position(|s| {
+            s.state == PlaybackState::Playing
+                && preferred_app.is_some_and(|app| app.eq_ignore_ascii_case(&s.app_id))
+        })
         .or(current_index.filter(|&i| sessions[i].state == PlaybackState::Playing))
         .or_else(|| {
             sessions
@@ -140,6 +145,31 @@ mod tests {
         assert_eq!(
             select_session(&sessions, Some(2), Some("PLAYER-1"), None),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn finds_playing_instance_of_preferred_application() {
+        let sessions = [
+            SessionInfo {
+                id: 1,
+                app_id: "player".into(),
+                state: PlaybackState::Paused,
+            },
+            SessionInfo {
+                id: 2,
+                app_id: "other".into(),
+                state: PlaybackState::Playing,
+            },
+            SessionInfo {
+                id: 3,
+                app_id: "player".into(),
+                state: PlaybackState::Playing,
+            },
+        ];
+        assert_eq!(
+            select_session(&sessions, Some(2), Some("player"), None),
+            Some(2)
         );
     }
 }

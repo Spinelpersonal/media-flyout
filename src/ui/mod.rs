@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use crate::{
     config::{ConfigStore, Theme},
@@ -32,6 +32,7 @@ struct Controller {
     tray: TrayIcon,
     hotkey: RefCell<Option<RegisteredHotkey>>,
     dismiss_timer: slint::Timer,
+    progress_timer: slint::Timer,
     latest: RefCell<Snapshot>,
     artwork: RefCell<Option<Arc<Artwork>>>,
     warnings: RefCell<Vec<String>>,
@@ -49,10 +50,12 @@ impl Controller {
             service.refresh();
         }
         self.arm_dismiss();
+        self.sync_progress();
     }
 
     fn hide(&self) {
         self.dismiss_timer.stop();
+        self.progress_timer.stop();
         self.flyout.set_session_menu(false);
         let _ = self.flyout.hide();
     }
@@ -97,13 +100,13 @@ impl Controller {
             NativeEvent::Dismiss => self.hide(),
             NativeEvent::Exit => {
                 self.hide();
+                self.native.finish_transition();
                 let _ = slint::quit_event_loop();
             }
             NativeEvent::Interaction => self.arm_dismiss(),
             NativeEvent::TrayCreated => {
                 let _ = self.tray.add();
-                self.tray
-                    .set_shortcut(&self.config.borrow().settings.shortcut);
+                self.update_tooltip();
             }
             NativeEvent::Resume => {
                 if let Some(service) = &*self.service.borrow() {
@@ -120,7 +123,10 @@ impl Controller {
                     self.arm_dismiss();
                 }
             }
-            NativeEvent::SettingsChanged => self.apply_theme(),
+            NativeEvent::SettingsChanged => {
+                self.native.configure(&self.config.borrow().settings);
+                self.apply_theme();
+            }
             NativeEvent::Reload => self.reload(),
         }
     }
@@ -132,6 +138,16 @@ impl Controller {
             Theme::System => platform::system_light_theme(),
         };
         self.flyout.global::<Palette>().set_light(light);
+    }
+
+    fn update_tooltip(&self) {
+        let shortcut = self
+            .hotkey
+            .borrow()
+            .as_ref()
+            .map(|h| h.shortcut().to_string())
+            .unwrap_or_else(|| "shortcut unavailable".into());
+        self.tray.set_shortcut(&shortcut);
     }
 
     fn apply_settings(self: &Rc<Self>) {
@@ -163,7 +179,7 @@ impl Controller {
                 }
             }
         }
-        self.tray.set_shortcut(&settings.shortcut);
+        self.update_tooltip();
         self.native.configure(&settings);
         self.apply_theme();
         if let Err(error) = platform::autostart(settings.autostart, &path) {
@@ -261,28 +277,43 @@ impl Controller {
         self.arm_dismiss();
     }
 
-    fn update(&self, snapshot: Snapshot) {
+    fn update(self: &Rc<Self>, snapshot: Snapshot) {
         present(&self.flyout, &snapshot);
         if let Some(warning) = self.warnings.borrow().first() {
             self.flyout.set_status(warning.as_str().into());
         }
-        let mut labels = vec![slint::SharedString::from(
-            "Automatic · follow playing media",
-        )];
-        labels.extend(snapshot.sessions.iter().map(|s| {
-            format!(
-                "{} · {}",
-                app_name(&s.app_id),
-                if s.state == PlaybackState::Playing {
-                    "Playing"
+        if self.flyout.get_session_labels().row_count() == 0
+            || self.latest.borrow().sessions != snapshot.sessions
+        {
+            let mut labels = vec![slint::SharedString::from(
+                "Automatic · follow playing media",
+            )];
+            labels.extend(snapshot.sessions.iter().map(|s| {
+                let name = app_name(&s.app_id);
+                let name = if snapshot
+                    .sessions
+                    .iter()
+                    .filter(|other| other.app_id == s.app_id)
+                    .count()
+                    > 1
+                {
+                    format!("{name} #{}", s.id)
                 } else {
-                    "Paused"
-                }
-            )
-            .into()
-        }));
-        self.flyout
-            .set_session_labels(Rc::new(slint::VecModel::from(labels)).into());
+                    name
+                };
+                format!(
+                    "{name} · {}",
+                    if s.state == PlaybackState::Playing {
+                        "Playing"
+                    } else {
+                        "Paused"
+                    }
+                )
+                .into()
+            }));
+            self.flyout
+                .set_session_labels(Rc::new(slint::VecModel::from(labels)).into());
+        }
         self.flyout.set_selected_session(if snapshot.manual {
             snapshot
                 .sessions
@@ -318,11 +349,60 @@ impl Controller {
             *self.artwork.borrow_mut() = snapshot.track.artwork.clone();
         }
         *self.latest.borrow_mut() = snapshot;
+        self.sync_progress();
+    }
+
+    fn refresh_progress(&self) {
+        let snapshot = self.latest.borrow();
+        let timeline = snapshot
+            .timeline
+            .as_ref()
+            .filter(|_| self.config.borrow().settings.show_progress);
+        self.flyout.set_has_timeline(timeline.is_some());
+        if let Some(timeline) = timeline {
+            let position = timeline.current_position();
+            self.flyout
+                .set_elapsed(media::timestamp(position).as_str().into());
+            self.flyout
+                .set_duration(media::timestamp(timeline.duration).as_str().into());
+            self.flyout.set_progress(
+                (position.as_secs_f64() / timeline.duration.as_secs_f64()).clamp(0.0, 1.0) as f32,
+            );
+        }
+    }
+
+    fn sync_progress(self: &Rc<Self>) {
+        self.refresh_progress();
+        let active = self.flyout.window().is_visible()
+            && self.config.borrow().settings.show_progress
+            && self
+                .latest
+                .borrow()
+                .timeline
+                .as_ref()
+                .is_some_and(|t| t.advancing);
+        if active && !self.progress_timer.running() {
+            let weak = Rc::downgrade(self);
+            self.progress_timer.start(
+                slint::TimerMode::Repeated,
+                Duration::from_secs(1),
+                move || {
+                    if let Some(controller) = weak.upgrade() {
+                        controller.refresh_progress();
+                    }
+                },
+            );
+        } else if !active {
+            self.progress_timer.stop();
+        }
     }
 }
 
 pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_instance) = platform::Instance::acquire()? else {
+        if options.preview.is_some() {
+            return Err("Close the running flyout before creating a preview".into());
+        }
         return Ok(());
     };
     let backend = platform::initialize()?;
@@ -337,6 +417,7 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         tray,
         hotkey: RefCell::new(None),
         dismiss_timer: slint::Timer::default(),
+        progress_timer: slint::Timer::default(),
         latest: RefCell::new(Snapshot::default()),
         artwork: RefCell::new(None),
         warnings: RefCell::new(Vec::new()),
@@ -438,6 +519,7 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     }
     slint::run_event_loop_until_quit()?;
     controller.hide();
+    controller.native.finish_transition();
     controller.service.borrow_mut().take();
     std::mem::replace(&mut *preview_result.borrow_mut(), Ok(()))?;
     Ok(())

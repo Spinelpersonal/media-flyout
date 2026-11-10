@@ -1,11 +1,11 @@
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use windows::{
@@ -20,7 +20,7 @@ use windows::{
 };
 use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
 
-use super::{Controls, PlaybackState, SessionInfo, Snapshot, Track, select_session};
+use super::{Controls, PlaybackState, SessionInfo, Snapshot, Timeline, Track, select_session};
 
 const TOPOLOGY: u8 = 1;
 const DATA: u8 = 2;
@@ -50,9 +50,11 @@ struct Notifier {
 
 impl Notifier {
     fn notify(&self, flags: u8) {
-        self.pending.fetch_or(flags, Ordering::Release);
+        let previous = self.pending.fetch_or(flags, Ordering::Release);
         // A full queue already guarantees a wakeup; pending flags are never lost.
-        let _ = self.sender.try_send(Command::Wake);
+        if previous == 0 {
+            let _ = self.sender.try_send(Command::Wake);
+        }
     }
 }
 
@@ -121,12 +123,19 @@ impl Drop for MediaService {
 
 /// WinRT waits are bounded and run only on the media worker, never on the UI thread.
 pub(super) fn wait<T: RuntimeType + 'static>(operation: IAsyncOperation<T>) -> Result<T> {
+    wait_for(operation, Duration::from_secs(3))
+}
+
+pub(super) fn wait_for<T: RuntimeType + 'static>(
+    operation: IAsyncOperation<T>,
+    timeout: Duration,
+) -> Result<T> {
     let (sender, receiver) = mpsc::sync_channel(1);
     operation.SetCompleted(&AsyncOperationCompletedHandler::new(move |_, _| {
         let _ = sender.try_send(());
         Ok(())
     }))?;
-    if receiver.recv_timeout(Duration::from_secs(3)).is_err() {
+    if receiver.recv_timeout(timeout).is_err() {
         let _ = operation.Cancel();
         return Err(Error::new(
             HRESULT(0x800705B4u32 as i32),
@@ -136,14 +145,14 @@ pub(super) fn wait<T: RuntimeType + 'static>(operation: IAsyncOperation<T>) -> R
     operation.GetResults()
 }
 
-struct Apartment;
+pub(super) struct Apartment(std::marker::PhantomData<std::rc::Rc<()>>);
 
 impl Apartment {
-    fn new() -> Result<Self> {
+    pub(super) fn new() -> Result<Self> {
         // SAFETY: Called on a dedicated new worker thread. Drop balances initialization
         // on that same thread after every WinRT object has been released.
         unsafe { RoInitialize(RO_INIT_MULTITHREADED)? };
-        Ok(Self)
+        Ok(Self(std::marker::PhantomData))
     }
 }
 
@@ -208,6 +217,8 @@ struct WatchedSession {
     timeline_token: Option<i64>,
     dirty: Arc<AtomicBool>,
     track: Track,
+    thumbnail: Option<windows::Storage::Streams::IRandomAccessStreamReference>,
+    revision: u64,
 }
 
 impl WatchedSession {
@@ -222,6 +233,8 @@ impl WatchedSession {
             timeline_token: None,
             dirty: Arc::new(AtomicBool::new(true)),
             track: Track::default(),
+            thumbnail: None,
+            revision: 0,
         };
         let notify = notifier.clone();
         let dirty = session.dirty.clone();
@@ -263,7 +276,7 @@ impl WatchedSession {
 
     fn read_track(&mut self) -> Result<()> {
         let properties = wait(self.native.TryGetMediaPropertiesAsync()?)?;
-        self.track = Track {
+        let mut track = Track {
             title: properties
                 .Title()
                 .map(|s| s.to_string_lossy())
@@ -276,11 +289,16 @@ impl WatchedSession {
                 .AlbumTitle()
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_default(),
-            artwork: properties
-                .Thumbnail()
-                .ok()
-                .and_then(|reference| super::artwork::load(reference).ok().flatten()),
+            artwork: None,
         };
+        if track.title == self.track.title
+            && track.artist == self.track.artist
+            && track.album == self.track.album
+        {
+            track.artwork = self.track.artwork.clone();
+        }
+        self.track = track;
+        self.thumbnail = properties.Thumbnail().ok();
         Ok(())
     }
 
@@ -305,6 +323,36 @@ impl WatchedSession {
         }
     }
 
+    fn timeline(&self) -> Option<Timeline> {
+        let timeline = self.native.GetTimelineProperties().ok()?;
+        let playback = self.native.GetPlaybackInfo().ok()?;
+        let rate = playback
+            .PlaybackRate()
+            .and_then(|r| r.Value())
+            .unwrap_or(1.0);
+        let updated = timeline.LastUpdatedTime().ok()?.UniversalTime;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos()
+            / 100
+            + 116_444_736_000_000_000;
+        let age = i128::try_from(now).ok()?.checked_sub(i128::from(updated))?;
+        let reliable_clock = (0..=864_000_000_000).contains(&age);
+        Timeline::from_ticks(
+            timeline.StartTime().ok()?.Duration,
+            timeline.EndTime().ok()?.Duration,
+            timeline.Position().ok()?.Duration,
+            rate,
+            self.state() == PlaybackState::Playing && reliable_clock,
+            if reliable_clock {
+                Duration::from_nanos(age as u64 * 100)
+            } else {
+                Duration::ZERO
+            },
+        )
+    }
+
     fn control(&self, action: Action) -> Result<bool> {
         let controls = self.native.GetPlaybackInfo()?.Controls()?;
         let operation = match action {
@@ -320,7 +368,11 @@ impl WatchedSession {
             {
                 self.native.TryPauseAsync()?
             }
-            Action::PlayPause if controls.IsPlayEnabled()? => self.native.TryPlayAsync()?,
+            Action::PlayPause
+                if self.state() != PlaybackState::Playing && controls.IsPlayEnabled()? =>
+            {
+                self.native.TryPlayAsync()?
+            }
             _ => return Ok(false),
         };
         wait(operation)
@@ -347,17 +399,140 @@ fn synchronize(
     next_id: &mut u64,
     notifier: &Notifier,
 ) -> Result<()> {
-    let native_sessions: Vec<_> = manager.GetSessions()?.into_iter().collect();
-    sessions.retain(|s| native_sessions.contains(&s.native));
-    for native in native_sessions {
-        if !sessions.iter().any(|s| s.native == native) {
-            *next_id += 1;
-            if let Ok(session) = WatchedSession::new(native, *next_id, notifier) {
-                sessions.push(session);
+    let native: Vec<_> = manager
+        .GetSessions()?
+        .into_iter()
+        .filter_map(|session| {
+            session
+                .SourceAppUserModelId()
+                .ok()
+                .map(|app| (session, app.to_string_lossy()))
+        })
+        .collect();
+    let mut plan = vec![None; native.len()];
+    let mut used = vec![false; sessions.len()];
+    // Windows may replace wrappers for still-open sessions. Reconcile identity,
+    // unique application IDs, then metadata before falling back to source order.
+    for (i, (session, _)) in native.iter().enumerate() {
+        if let Some(j) = sessions
+            .iter()
+            .enumerate()
+            .position(|(j, old)| !used[j] && old.native == *session)
+        {
+            plan[i] = Some(j);
+            used[j] = true;
+        }
+    }
+    for (i, (_, app)) in native.iter().enumerate() {
+        if plan[i].is_some() {
+            continue;
+        }
+        let candidates: Vec<_> = sessions
+            .iter()
+            .enumerate()
+            .filter(|(j, old)| !used[*j] && old.app_id == *app)
+            .map(|(j, _)| j)
+            .collect();
+        if candidates.len() == 1 && native.iter().filter(|(_, other)| other == app).count() == 1 {
+            plan[i] = Some(candidates[0]);
+            used[candidates[0]] = true;
+        }
+    }
+    let mut old_keys = vec![None; sessions.len()];
+    for (i, (session, app)) in native.iter().enumerate() {
+        if plan[i].is_some()
+            || !sessions
+                .iter()
+                .enumerate()
+                .any(|(j, old)| !used[j] && old.app_id == *app)
+        {
+            continue;
+        }
+        let Some(key) = metadata_key(session) else {
+            continue;
+        };
+        for (j, old) in sessions.iter().enumerate() {
+            if used[j] || old.app_id != *app {
+                continue;
+            }
+            let old_key = old_keys[j].get_or_insert_with(|| {
+                metadata_key(&old.native).unwrap_or_else(|| {
+                    (
+                        old.track.title.clone(),
+                        old.track.artist.clone(),
+                        old.track.album.clone(),
+                    )
+                })
+            });
+            if *old_key == key {
+                plan[i] = Some(j);
+                used[j] = true;
+                break;
             }
         }
     }
+    // There is no public persistent ID for indistinguishable sessions.
+    for (i, (_, app)) in native.iter().enumerate() {
+        if plan[i].is_none()
+            && let Some(j) = sessions
+                .iter()
+                .enumerate()
+                .position(|(j, old)| !used[j] && old.app_id == *app)
+        {
+            plan[i] = Some(j);
+            used[j] = true;
+        }
+    }
+    let mut old: Vec<_> = std::mem::take(sessions).into_iter().map(Some).collect();
+    for (i, (native, _)) in native.into_iter().enumerate() {
+        let existing = plan[i].and_then(|j| old[j].take());
+        if existing.as_ref().is_some_and(|old| old.native == native) {
+            if let Some(existing) = existing {
+                sessions.push(existing);
+            }
+            continue;
+        }
+        let id = existing.as_ref().map(|s| s.id).unwrap_or_else(|| {
+            *next_id += 1;
+            *next_id
+        });
+        if let Ok(mut session) = WatchedSession::new(native, id, notifier) {
+            session.revision = existing.as_ref().map_or(0, |s| s.revision.wrapping_add(1));
+            if let Some(existing) = &existing {
+                session.track = existing.track.clone();
+            }
+            sessions.push(session);
+        }
+    }
     Ok(())
+}
+
+fn metadata_key(session: &Session) -> Option<(String, String, String)> {
+    let properties = wait(session.TryGetMediaPropertiesAsync().ok()?).ok()?;
+    Some((
+        properties.Title().ok()?.to_string_lossy(),
+        properties.Artist().ok()?.to_string_lossy(),
+        properties.AlbumTitle().ok()?.to_string_lossy(),
+    ))
+}
+
+fn current_session(manager: &Manager, sessions: &[WatchedSession]) -> Option<u64> {
+    let native = manager.GetCurrentSession().ok()?;
+    if let Some(session) = sessions.iter().find(|s| s.native == native) {
+        return Some(session.id);
+    }
+    let app = native.SourceAppUserModelId().ok()?.to_string_lossy();
+    let mut matching = sessions.iter().filter(|s| s.app_id == app);
+    let first = matching.next()?;
+    if matching.next().is_none() {
+        return Some(first.id);
+    }
+    let key = metadata_key(&native)?;
+    sessions
+        .iter()
+        .filter(|s| s.app_id == app)
+        .find(|s| metadata_key(&s.native).as_ref() == Some(&key))
+        .map(|s| s.id)
 }
 
 fn snapshot(
@@ -366,6 +541,7 @@ fn snapshot(
     status: Option<String>,
     preferred: Option<&str>,
     manual: Option<u64>,
+    artwork: Option<&super::artwork::Worker>,
 ) -> Snapshot {
     let mut snapshot = Snapshot {
         status,
@@ -379,24 +555,33 @@ fn snapshot(
             state: s.state(),
         })
         .collect();
-    let current = manager
-        .GetCurrentSession()
-        .ok()
-        .and_then(|native| sessions.iter().find(|s| s.native == native).map(|s| s.id));
+    let current = current_session(manager, sessions);
     if let Some(index) = select_session(&snapshot.sessions, current, preferred, manual) {
         let session = &mut sessions[index];
         snapshot.selected = Some(session.id);
         snapshot.manual = manual == Some(session.id);
         snapshot.state = snapshot.sessions[index].state;
         snapshot.controls = session.controls();
-        if session.dirty.swap(false, Ordering::AcqRel)
-            && let Err(error) = session.read_track()
-        {
-            session.track = Track::default();
-            session.dirty.store(true, Ordering::Release);
-            snapshot.status = Some(format!("Metadata unavailable: {error}"));
+        snapshot.timeline = session.timeline();
+        if session.dirty.swap(false, Ordering::AcqRel) {
+            session.revision = session.revision.wrapping_add(1);
+            if let Err(error) = session.read_track() {
+                session.track = Track::default();
+                session.thumbnail = None;
+                session.dirty.store(true, Ordering::Release);
+                snapshot.status = Some(format!("Metadata unavailable: {error}"));
+            }
         }
         snapshot.track = session.track.clone();
+        if let (Some(worker), Some(reference)) = (artwork, session.thumbnail.take())
+            && let Ok(reference) = windows::core::AgileReference::new(&reference)
+        {
+            worker.request(super::artwork::Job {
+                session_id: session.id,
+                revision: session.revision,
+                reference,
+            });
+        }
     }
     for session in sessions {
         if Some(session.id) != snapshot.selected && session.track.artwork.take().is_some() {
@@ -413,6 +598,14 @@ fn run(
     on_snapshot: &impl Fn(Snapshot),
 ) -> Result<()> {
     let _apartment = Apartment::new()?;
+    let decoded = Arc::new(Mutex::new(None::<super::artwork::Decoded>));
+    let result_slot = decoded.clone();
+    let artwork_notify = notifier.clone();
+    let artwork = super::artwork::Worker::start(move |result| {
+        *result_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
+        artwork_notify.notify(DATA);
+    })
+    .ok();
     let mut events = ManagerEvents::new(&notifier).ok();
     let mut sessions = Vec::new();
     let mut next_id = 0;
@@ -425,6 +618,7 @@ fn run(
                 None,
                 preferred.as_deref(),
                 manual,
+                artwork.as_ref(),
             ),
             Err(error) => Snapshot {
                 status: Some(format!("Sessions unavailable: {error}")),
@@ -455,6 +649,9 @@ fn run(
                 if events.is_none() {
                     events = ManagerEvents::new(&notifier).ok();
                 }
+                for session in &sessions {
+                    session.dirty.store(true, Ordering::Release);
+                }
                 notifier.pending.fetch_or(TOPOLOGY, Ordering::Release);
             }
             Command::Reconnect => {
@@ -470,19 +667,39 @@ fn run(
                         Ok(false) => Some("This player did not accept the control".into()),
                         Err(error) => Some(format!("Player unavailable: {error}")),
                     };
+                } else {
+                    status = Some("No media session is available".into());
                 }
             }
         }
         let flags = notifier.pending.swap(0, Ordering::AcqRel);
+        if flags & TOPOLOGY != 0 {
+            let result = events
+                .as_ref()
+                .map(|events| synchronize(&events.manager, &mut sessions, &mut next_id, &notifier));
+            if let Some(Err(error)) = result {
+                sessions.clear();
+                drop(events.take());
+                last = Snapshot {
+                    status: Some(format!(
+                        "Sessions unavailable: {error}. Reopen to reconnect."
+                    )),
+                    ..Snapshot::default()
+                };
+                on_snapshot(last.clone());
+                continue;
+            }
+        }
         let Some(events) = &events else {
             on_snapshot(last.clone());
             continue;
         };
-        if flags & TOPOLOGY != 0
-            && let Err(error) = synchronize(&events.manager, &mut sessions, &mut next_id, &notifier)
+        if let Some(result) = decoded.lock().unwrap_or_else(|p| p.into_inner()).take()
+            && let Some(session) = sessions
+                .iter_mut()
+                .find(|s| s.id == result.session_id && s.revision == result.revision)
         {
-            sessions.clear();
-            status = Some(format!("Sessions unavailable: {error}"));
+            session.track.artwork = result.image;
         }
         last = snapshot(
             &events.manager,
@@ -490,6 +707,7 @@ fn run(
             status,
             preferred.as_deref(),
             manual,
+            artwork.as_ref(),
         );
         on_snapshot(last.clone());
     }

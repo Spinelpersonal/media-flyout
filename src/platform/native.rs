@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicIsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use slint::{
@@ -36,8 +36,16 @@ const QUIT_MESSAGE: u32 = WM_APP + 2;
 const REPOSITION_MESSAGE: u32 = WM_APP + 3;
 const TIMER: usize = 1;
 const VISIBLE_INPUT_TIMER: usize = 2;
+const FADE_TIMER: usize = 3;
 type Task = Box<dyn FnOnce() + Send>;
 type EventHandler = Rc<dyn Fn(NativeEvent)>;
+
+#[derive(Clone, Copy)]
+struct Fade {
+    started: Instant,
+    from: u8,
+    to: u8,
+}
 
 #[derive(Clone, Copy)]
 pub enum NativeEvent {
@@ -234,6 +242,9 @@ pub struct NativeWindow {
     taskbar_created: Cell<u32>,
     placement: Cell<(crate::config::Position, crate::config::Monitor, u16)>,
     outside_click: Cell<bool>,
+    animation_enabled: Cell<bool>,
+    opacity: Cell<u8>,
+    fade: Cell<Option<Fade>>,
 }
 
 impl NativeWindow {
@@ -259,6 +270,9 @@ impl NativeWindow {
                 20,
             )),
             outside_click: Cell::new(true),
+            animation_enabled: Cell::new(true),
+            opacity: Cell::new(255),
+            fade: Cell::new(None),
         });
         // SAFETY: The registered procedure is valid for the process lifetime. The
         // stable Rc allocation outlives the HWND, and only its UI thread accesses it.
@@ -275,7 +289,7 @@ impl NativeWindow {
                 return Err(windows::core::Error::from_thread());
             }
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 w!("MediaFlyoutWindow"),
                 w!("Media Flyout"),
                 WS_POPUP,
@@ -289,6 +303,12 @@ impl NativeWindow {
                 Some(Rc::as_ptr(&native).cast()),
             )?;
             native.hwnd.set(hwnd);
+            SetLayeredWindowAttributes(
+                hwnd,
+                windows::Win32::Foundation::COLORREF(0),
+                255,
+                LWA_ALPHA,
+            )?;
             native
                 .taskbar_created
                 .set(RegisterWindowMessageW(w!("TaskbarCreated")));
@@ -317,8 +337,65 @@ impl NativeWindow {
         self.placement
             .set((settings.position, settings.monitor, settings.margin));
         self.outside_click.set(settings.dismiss_on_outside_click);
+        let mut animation = windows::core::BOOL::from(true);
+        // SAFETY: SPI_GETCLIENTAREAANIMATION writes one initialized BOOL. This
+        // respects Windows' animation preference in addition to the app setting.
+        unsafe {
+            let _ = SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                Some((&mut animation as *mut windows::core::BOOL).cast()),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+        }
+        self.animation_enabled
+            .set(settings.animations && animation.as_bool());
+        if !self.animation_enabled.get() {
+            self.finish_transition();
+        }
         if self.visible.get() {
             self.position_at_top();
+        }
+    }
+
+    pub fn finish_transition(&self) {
+        self.fade.set(None);
+        // SAFETY: Both timer and layered window belong to this UI thread.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd.get()), FADE_TIMER);
+            if !self.visible.get() {
+                let _ = ShowWindow(self.hwnd.get(), SW_HIDE);
+            }
+            self.opacity.set(255);
+            let _ = SetLayeredWindowAttributes(
+                self.hwnd.get(),
+                windows::Win32::Foundation::COLORREF(0),
+                255,
+                LWA_ALPHA,
+            );
+        }
+    }
+
+    fn advance_fade(&self) {
+        let Some(fade) = self.fade.get() else {
+            return;
+        };
+        let progress = (fade.started.elapsed().as_secs_f32() / 0.12).min(1.0);
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        let opacity = (f32::from(fade.from) + (f32::from(fade.to) - f32::from(fade.from)) * eased)
+            .round() as u8;
+        self.opacity.set(opacity);
+        // SAFETY: Alpha changes reuse the already rendered window surface.
+        unsafe {
+            let _ = SetLayeredWindowAttributes(
+                self.hwnd.get(),
+                windows::Win32::Foundation::COLORREF(0),
+                opacity,
+                LWA_ALPHA,
+            );
+        }
+        if progress >= 1.0 {
+            self.finish_transition();
         }
     }
 
@@ -524,7 +601,7 @@ impl WindowAdapter for NativeWindow {
         &self.renderer
     }
     fn set_visible(&self, visible: bool) -> Result<(), PlatformError> {
-        self.visible.set(visible);
+        let was_visible = self.visible.replace(visible);
         if visible {
             self.position_at_top();
             self.request_redraw();
@@ -540,10 +617,36 @@ impl WindowAdapter for NativeWindow {
             } else {
                 let _ = KillTimer(Some(self.hwnd.get()), VISIBLE_INPUT_TIMER);
             }
-            let _ = ShowWindow(
-                self.hwnd.get(),
-                if visible { SW_SHOWNOACTIVATE } else { SW_HIDE },
-            );
+            if self.animation_enabled.get() && (was_visible != visible || self.fade.get().is_some())
+            {
+                let from = if visible && !was_visible && self.fade.get().is_none() {
+                    0
+                } else {
+                    self.opacity.get()
+                };
+                self.fade.set(Some(Fade {
+                    started: Instant::now(),
+                    from,
+                    to: if visible { 255 } else { 0 },
+                }));
+                self.opacity.set(from);
+                let _ = SetLayeredWindowAttributes(
+                    self.hwnd.get(),
+                    windows::Win32::Foundation::COLORREF(0),
+                    from,
+                    LWA_ALPHA,
+                );
+                if visible {
+                    let _ = ShowWindow(self.hwnd.get(), SW_SHOWNOACTIVATE);
+                }
+                SetTimer(Some(self.hwnd.get()), FADE_TIMER, 16, None);
+            } else {
+                self.finish_transition();
+                let _ = ShowWindow(
+                    self.hwnd.get(),
+                    if visible { SW_SHOWNOACTIVATE } else { SW_HIDE },
+                );
+            }
         }
         Ok(())
     }
@@ -662,6 +765,23 @@ unsafe extern "system" fn window_proc(
                     button: PointerEventButton::Left,
                 });
             }
+            WM_MOUSEWHEEL => {
+                let mut point = windows::Win32::Foundation::POINT {
+                    x: (lparam.0 as u16) as i16 as i32,
+                    y: ((lparam.0 >> 16) as u16) as i16 as i32,
+                };
+                if ScreenToClient(hwnd, &mut point).as_bool() {
+                    window.emit(NativeEvent::Interaction);
+                    window.dispatch(WindowEvent::PointerScrolled {
+                        position: LogicalPosition::new(
+                            point.x as f32 / window.window.scale_factor(),
+                            point.y as f32 / window.window.scale_factor(),
+                        ),
+                        delta_x: 0.0,
+                        delta_y: ((wparam.0 >> 16) as u16) as i16 as f32 / 120.0 * 102.0,
+                    });
+                }
+            }
             WM_DPICHANGED => {
                 let scale = (wparam.0 as u16) as f32 / 96.0;
                 window.dispatch(WindowEvent::ScaleFactorChanged {
@@ -678,6 +798,9 @@ unsafe extern "system" fn window_proc(
             }
             WM_TIMER if wparam.0 == VISIBLE_INPUT_TIMER => {
                 window.check_visible_input();
+            }
+            WM_TIMER if wparam.0 == FADE_TIMER => {
+                window.advance_fade();
             }
             WM_HOTKEY if wparam.0 == 1 || wparam.0 == 2 => {
                 window.emit(NativeEvent::Toggle);

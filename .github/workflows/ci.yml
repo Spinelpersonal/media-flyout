@@ -1,0 +1,57 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Package binary and corresponding source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path target/package, target/source, target/source/.cargo -Force | Out-Null
+          Copy-Item target/release/media-flyout.exe, README.md, LICENSE, config.example.toml target/package/
+          git archive --format=zip --output=target/project-source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive -LiteralPath target/project-source.zip -DestinationPath target/source -Force
+          cargo vendor --locked target/source/vendor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @'
+          [source.crates-io]
+          replace-with = "vendored-sources"
+          [source.vendored-sources]
+          directory = "vendor"
+          '@ | Add-Content -LiteralPath target/source/.cargo/config.toml -Encoding utf8
+          "Corresponding source is in the accompanying media-flyout-source.zip. Revision: ${{ github.sha }}" | Set-Content target/package/SOURCE.txt
+          Compress-Archive -Path target/package/* -DestinationPath target/media-flyout-windows-x64.zip
+          tar.exe -a -c -f target/media-flyout-source.zip -C target source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v6
+        with:
+          name: media-flyout-windows-x64
+          path: |
+            target/media-flyout-windows-x64.zip
+            target/media-flyout-source.zip
+          if-no-files-found: error

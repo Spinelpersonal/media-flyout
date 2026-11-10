@@ -9,10 +9,10 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, RECT},
         UI::WindowsAndMessaging::{
-            FindWindowW, GWL_EXSTYLE, GetWindowLongPtrW, IsWindowVisible, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW,
+            FindWindowW, GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         },
     },
     core::w,
@@ -24,6 +24,103 @@ impl Drop for App {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+#[ignore = "Requires the interactive Windows desktop, shell, and no running flyout"]
+fn shortcut_conflict_and_reload_preserve_working_registration() {
+    use media_flyout::hotkey::{RegisteredHotkey, Shortcut};
+    assert!(
+        window().is_none(),
+        "Close the existing flyout before this test"
+    );
+    let first: Shortcut = "Ctrl+Alt+Shift+F23".parse().expect("shortcut");
+    let second: Shortcut = "Ctrl+Alt+Shift+F22".parse().expect("shortcut");
+    let blocker =
+        RegisteredHotkey::register(HWND::default(), 97, first).expect("reserve test shortcut");
+    let config =
+        std::env::temp_dir().join(format!("media-flyout-reload-{}.toml", std::process::id()));
+    std::fs::write(&config, "shortcut = 'Ctrl+Alt+Shift+F23'\ndismiss_after_seconds = 0\ndismiss_on_outside_click = false\nanimations = false\n").expect("settings");
+    let mut app = App(command(&config).arg("--show").spawn().expect("start"));
+    wait_until(Duration::from_secs(10), || {
+        window().is_some_and(|hwnd| {
+            // SAFETY: Read-only visibility query on the test application's HWND.
+            unsafe { IsWindowVisible(hwnd).as_bool() }
+        })
+    });
+    assert!(
+        app.0.try_wait().expect("status").is_none(),
+        "shortcut conflict does not terminate the app"
+    );
+    drop(blocker);
+    assert!(
+        command(&config)
+            .arg("--reload")
+            .status()
+            .expect("reload")
+            .success()
+    );
+    wait_until(Duration::from_secs(5), || {
+        RegisteredHotkey::register(HWND::default(), 99, first).is_err()
+    });
+    let blocker =
+        RegisteredHotkey::register(HWND::default(), 98, second).expect("reserve new shortcut");
+    let hwnd = window().expect("window");
+    let mut before = RECT::default();
+    // SAFETY: Initialized RECT output and live test HWND.
+    unsafe {
+        GetWindowRect(hwnd, &mut before).expect("window rectangle");
+    }
+    std::fs::write(&config, "shortcut = 'Ctrl+Alt+Shift+F22'\nposition = 'bottom-right'\ndismiss_after_seconds = 0\ndismiss_on_outside_click = false\nanimations = false\n").expect("settings");
+    assert!(
+        command(&config)
+            .arg("--reload")
+            .status()
+            .expect("reload")
+            .success()
+    );
+    wait_until(Duration::from_secs(5), || {
+        let mut after = RECT::default();
+        // SAFETY: Read-only geometry query proves the reload message was processed.
+        unsafe {
+            GetWindowRect(hwnd, &mut after).is_ok()
+                && (after.left != before.left || after.top != before.top)
+        }
+    });
+    assert!(
+        RegisteredHotkey::register(HWND::default(), 99, first).is_err(),
+        "old shortcut retained when replacement conflicts"
+    );
+    drop(blocker);
+    assert!(
+        command(&config)
+            .arg("--reload")
+            .status()
+            .expect("reload")
+            .success()
+    );
+    wait_until(Duration::from_secs(5), || {
+        RegisteredHotkey::register(HWND::default(), 99, first).is_ok()
+    });
+    assert!(
+        RegisteredHotkey::register(HWND::default(), 99, second).is_err(),
+        "replacement shortcut registered"
+    );
+    assert!(
+        command(&config)
+            .arg("--quit")
+            .status()
+            .expect("exit")
+            .success()
+    );
+    wait_until(Duration::from_secs(10), || {
+        app.0.try_wait().expect("status").is_some()
+    });
+    assert!(
+        RegisteredHotkey::register(HWND::default(), 99, second).is_ok(),
+        "replacement released on exit"
+    );
+    std::fs::remove_file(config).expect("remove settings");
 }
 
 fn command(config: &Path) -> Command {

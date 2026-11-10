@@ -12,6 +12,42 @@ pub struct Shortcut {
     pub key: u32,
 }
 
+impl std::fmt::Display for Shortcut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (bit, name) in [
+            (MOD_CONTROL.0, "Ctrl"),
+            (MOD_ALT.0, "Alt"),
+            (MOD_SHIFT.0, "Shift"),
+            (MOD_WIN.0, "Win"),
+        ] {
+            if self.modifiers & bit != 0 {
+                write!(f, "{name}+")?;
+            }
+        }
+        match self.key {
+            0x30..=0x39 | 0x41..=0x5A => write!(f, "{}", self.key as u8 as char),
+            0x70..=0x87 => write!(f, "F{}", self.key - 0x6F),
+            key => f.write_str(match key {
+                0x20 => "Space",
+                0x09 => "Tab",
+                0x0D => "Enter",
+                0x2D => "Insert",
+                0x2E => "Delete",
+                0x24 => "Home",
+                0x23 => "End",
+                0x21 => "PageUp",
+                0x22 => "PageDown",
+                0x26 => "Up",
+                0x28 => "Down",
+                0x25 => "Left",
+                0x27 => "Right",
+                0x13 => "Pause",
+                _ => "Unknown",
+            }),
+        }
+    }
+}
+
 impl std::str::FromStr for Shortcut {
     type Err = String;
     fn from_str(text: &str) -> Result<Self, Self::Err> {
@@ -116,6 +152,13 @@ mod tests {
     use super::*;
     #[test]
     fn parses_shortcuts_and_aliases() {
+        assert_eq!(
+            "control + space"
+                .parse::<Shortcut>()
+                .expect("shortcut")
+                .to_string(),
+            "Ctrl+Space"
+        );
         assert_eq!(
             "Ctrl + Space".parse::<Shortcut>(),
             Ok(Shortcut {
