@@ -9,6 +9,7 @@ use std::{
 use slint::ComponentHandle;
 
 use crate::{
+    config::{ConfigStore, Theme},
     hotkey::RegisteredHotkey,
     media::{self, Action, Artwork, PlaybackState, Snapshot},
     platform::{self, NativeEvent, NativeWindow},
@@ -21,6 +22,7 @@ slint::include_modules!();
 pub struct RunOptions {
     pub show: bool,
     pub preview: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
 }
 
 struct Controller {
@@ -28,11 +30,12 @@ struct Controller {
     native: Rc<NativeWindow>,
     service: RefCell<Option<media::MediaService>>,
     tray: TrayIcon,
-    _hotkey: Option<RegisteredHotkey>,
+    hotkey: RefCell<Option<RegisteredHotkey>>,
     dismiss_timer: slint::Timer,
     latest: RefCell<Snapshot>,
     artwork: RefCell<Option<Arc<Artwork>>>,
-    warning: Option<String>,
+    warnings: RefCell<Vec<String>>,
+    config: RefCell<ConfigStore>,
 }
 
 impl Controller {
@@ -50,6 +53,7 @@ impl Controller {
 
     fn hide(&self) {
         self.dismiss_timer.stop();
+        self.flyout.set_session_menu(false);
         let _ = self.flyout.hide();
     }
 
@@ -62,10 +66,15 @@ impl Controller {
     }
 
     fn arm_dismiss(self: &Rc<Self>) {
+        let seconds = self.config.borrow().settings.dismiss_after_seconds;
+        if seconds == 0 {
+            self.dismiss_timer.stop();
+            return;
+        }
         let weak = Rc::downgrade(self);
         self.dismiss_timer.start(
             slint::TimerMode::SingleShot,
-            Duration::from_secs(10),
+            Duration::from_secs(u64::from(seconds)),
             move || {
                 if let Some(controller) = weak.upgrade() {
                     controller.hide();
@@ -93,6 +102,8 @@ impl Controller {
             NativeEvent::Interaction => self.arm_dismiss(),
             NativeEvent::TrayCreated => {
                 let _ = self.tray.add();
+                self.tray
+                    .set_shortcut(&self.config.borrow().settings.shortcut);
             }
             NativeEvent::Resume => {
                 if let Some(service) = &*self.service.borrow() {
@@ -101,23 +112,186 @@ impl Controller {
             }
             NativeEvent::TrayMenu => {
                 self.dismiss_timer.stop();
-                match self.tray.show_menu() {
-                    Some(MenuAction::Toggle) => self.toggle(),
-                    Some(MenuAction::Exit) => self.native_event(NativeEvent::Exit),
-                    None => {}
+                let settings = self.config.borrow().settings.clone();
+                if let Some(action) = self.tray.show_menu(&settings) {
+                    self.menu_action(action);
                 }
                 if self.flyout.window().is_visible() {
                     self.arm_dismiss();
                 }
             }
+            NativeEvent::SettingsChanged => self.apply_theme(),
+            NativeEvent::Reload => self.reload(),
         }
+    }
+
+    fn apply_theme(&self) {
+        let light = match self.config.borrow().settings.theme {
+            Theme::Light => true,
+            Theme::Dark => false,
+            Theme::System => platform::system_light_theme(),
+        };
+        self.flyout.global::<Palette>().set_light(light);
+    }
+
+    fn apply_settings(self: &Rc<Self>) {
+        let store = self.config.borrow();
+        let settings = store.settings.clone();
+        let path = store.path.clone();
+        *self.warnings.borrow_mut() = store.warnings.clone();
+        drop(store);
+        if let Ok(shortcut) = settings.shortcut.parse() {
+            let needs_registration = self
+                .hotkey
+                .borrow()
+                .as_ref()
+                .is_none_or(|old| old.shortcut() != shortcut);
+            if needs_registration {
+                let id = self
+                    .hotkey
+                    .borrow()
+                    .as_ref()
+                    .map_or(1, |old| if old.id() == 1 { 2 } else { 1 });
+                match RegisteredHotkey::register(self.native.handle(), id, shortcut) {
+                    Ok(hotkey) => {
+                        *self.hotkey.borrow_mut() = Some(hotkey);
+                    }
+                    Err(error) => self
+                        .warnings
+                        .borrow_mut()
+                        .push(format!("Shortcut unavailable; use the tray icon. {error}")),
+                }
+            }
+        }
+        self.tray.set_shortcut(&settings.shortcut);
+        self.native.configure(&settings);
+        self.apply_theme();
+        if let Err(error) = platform::autostart(settings.autostart, &path) {
+            self.warnings
+                .borrow_mut()
+                .push(format!("Startup setting failed: {error}"));
+        }
+        if let Some(service) = &*self.service.borrow() {
+            service.prefer(settings.preferred_app);
+            service.select(None);
+        }
+        let snapshot = self.latest.borrow().clone();
+        self.update(snapshot);
+        if let Some(warning) = self.warnings.borrow().first() {
+            self.tray.notify(warning);
+        }
+        if self.flyout.window().is_visible() {
+            self.arm_dismiss();
+        }
+    }
+
+    fn reload(self: &Rc<Self>) {
+        let result = self.config.borrow_mut().reload();
+        match result {
+            Ok(()) => self.apply_settings(),
+            Err(error) => self.tray.notify(&format!("Settings unchanged: {error}")),
+        }
+    }
+
+    fn menu_action(self: &Rc<Self>, action: MenuAction) {
+        match action {
+            MenuAction::Toggle => self.toggle(),
+            MenuAction::Exit => self.native_event(NativeEvent::Exit),
+            MenuAction::Reload => self.reload(),
+            MenuAction::OpenConfig => {
+                if let Err(error) = platform::open_config(&self.config.borrow().path) {
+                    self.tray.notify(&error);
+                }
+            }
+            MenuAction::Autostart | MenuAction::Remember => {
+                let (key, enabled) = {
+                    let store = self.config.borrow();
+                    match action {
+                        MenuAction::Autostart => ("autostart", !store.settings.autostart),
+                        _ => (
+                            "remember_preferred_app",
+                            !store.settings.remember_preferred_app,
+                        ),
+                    }
+                };
+                let result = self.config.borrow_mut().set(key, enabled);
+                match result {
+                    Ok(()) => self.apply_settings(),
+                    Err(error) => self.tray.notify(&format!("Cannot save settings: {error}")),
+                }
+            }
+            MenuAction::Automatic => {
+                let result = self.config.borrow_mut().set("preferred_app", "");
+                match result {
+                    Ok(()) => self.apply_settings(),
+                    Err(error) => self
+                        .tray
+                        .notify(&format!("Cannot save preference: {error}")),
+                }
+            }
+        }
+    }
+
+    fn select(self: &Rc<Self>, index: i32) {
+        let selected = usize::try_from(index)
+            .ok()
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| self.latest.borrow().sessions.get(i).cloned());
+        if let Some(service) = &*self.service.borrow() {
+            service.select(selected.as_ref().map(|s| s.id));
+        }
+        if self.config.borrow().settings.remember_preferred_app
+            && let Some(selected) = selected
+        {
+            let result = self
+                .config
+                .borrow_mut()
+                .set("preferred_app", selected.app_id.clone());
+            match result {
+                Ok(()) => {
+                    if let Some(service) = &*self.service.borrow() {
+                        service.prefer(Some(selected.app_id));
+                    }
+                }
+                Err(error) => self
+                    .tray
+                    .notify(&format!("Cannot remember application: {error}")),
+            }
+        }
+        self.arm_dismiss();
     }
 
     fn update(&self, snapshot: Snapshot) {
         present(&self.flyout, &snapshot);
-        if let Some(warning) = &self.warning {
+        if let Some(warning) = self.warnings.borrow().first() {
             self.flyout.set_status(warning.as_str().into());
         }
+        let mut labels = vec![slint::SharedString::from(
+            "Automatic · follow playing media",
+        )];
+        labels.extend(snapshot.sessions.iter().map(|s| {
+            format!(
+                "{} · {}",
+                app_name(&s.app_id),
+                if s.state == PlaybackState::Playing {
+                    "Playing"
+                } else {
+                    "Paused"
+                }
+            )
+            .into()
+        }));
+        self.flyout
+            .set_session_labels(Rc::new(slint::VecModel::from(labels)).into());
+        self.flyout.set_selected_session(if snapshot.manual {
+            snapshot
+                .sessions
+                .iter()
+                .position(|s| Some(s.id) == snapshot.selected)
+                .map_or(0, |i| i as i32 + 1)
+        } else {
+            0
+        });
         let changed = match (&*self.artwork.borrow(), &snapshot.track.artwork) {
             (Some(old), Some(new)) => !Arc::ptr_eq(old, new),
             (None, None) => false,
@@ -155,30 +329,20 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     let flyout = Flyout::new()?;
     let native = backend.window().ok_or("Native flyout was not created")?;
     let tray = TrayIcon::new(native.handle())?;
-    let shortcut = "Ctrl+Space".parse()?;
-    let (hotkey, warning) = match RegisteredHotkey::register(native.handle(), 1, shortcut) {
-        Ok(hotkey) => (Some(hotkey), None),
-        Err(error) => {
-            tray.notify(&format!(
-                "Ctrl + Space is unavailable: {error}. Use the tray icon to open the flyout."
-            ));
-            (
-                None,
-                Some("Shortcut unavailable. Use the tray icon.".into()),
-            )
-        }
-    };
+    let config = ConfigStore::load(options.config_path)?;
     let controller = Rc::new(Controller {
         flyout,
         native,
         service: RefCell::new(None),
         tray,
-        _hotkey: hotkey,
+        hotkey: RefCell::new(None),
         dismiss_timer: slint::Timer::default(),
         latest: RefCell::new(Snapshot::default()),
         artwork: RefCell::new(None),
-        warning,
+        warnings: RefCell::new(Vec::new()),
+        config: RefCell::new(config),
     });
+    controller.apply_settings();
     let weak = Rc::downgrade(&controller);
     controller.native.set_event_handler(move |event| {
         if let Some(controller) = weak.upgrade() {
@@ -216,6 +380,12 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
             controller.control(Action::Next);
         }
     });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_select_session(move |index| {
+        if let Some(controller) = weak.upgrade() {
+            controller.select(index);
+        }
+    });
     let mailbox = Arc::new(Mutex::new(None::<Snapshot>));
     let pending = mailbox.clone();
     let weak = Rc::downgrade(&controller);
@@ -226,7 +396,8 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let weak = controller.flyout.as_weak();
-    let service = media::MediaService::start(move |snapshot| {
+    let preferred = controller.config.borrow().settings.preferred_app.clone();
+    let service = media::MediaService::with_preference(preferred, move |snapshot| {
         let should_schedule = mailbox
             .lock()
             .map(|mut slot| slot.replace(snapshot).is_none())
@@ -324,12 +495,29 @@ fn present(flyout: &Flyout, snapshot: &Snapshot) {
         .sessions
         .iter()
         .find(|s| Some(s.id) == snapshot.selected)
-        .map(|s| s.app_id.strip_suffix(".exe").unwrap_or(&s.app_id))
-        .unwrap_or("MEDIA FLYOUT");
-    flyout.set_source(source.into());
+        .map(|s| app_name(&s.app_id))
+        .unwrap_or_else(|| "MEDIA FLYOUT".into());
+    flyout.set_source(source.as_str().into());
     flyout.set_playing(snapshot.state == PlaybackState::Playing);
     flyout.set_can_toggle(snapshot.controls.play_pause);
     flyout.set_can_previous(snapshot.controls.previous);
     flyout.set_can_next(snapshot.controls.next);
     flyout.set_status(snapshot.status.as_deref().unwrap_or_default().into());
+}
+
+fn app_name(app_id: &str) -> String {
+    let lower = app_id.to_ascii_lowercase();
+    for (needle, name) in [
+        ("spotify", "Spotify"),
+        ("foobar2000", "foobar2000"),
+        ("firefox", "Firefox"),
+        ("chrome", "Chrome"),
+        ("msedge", "Edge"),
+    ] {
+        if lower.contains(needle) {
+            return name.into();
+        }
+    }
+    let name = app_id.rsplit('!').next().unwrap_or(app_id);
+    name.strip_suffix(".exe").unwrap_or(name).to_owned()
 }

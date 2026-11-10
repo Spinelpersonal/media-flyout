@@ -9,6 +9,7 @@ use windows::{
 
 pub const SHOW_MESSAGE: u32 = WM_APP + 20;
 pub const EXIT_MESSAGE: u32 = WM_APP + 21;
+pub const RELOAD_MESSAGE: u32 = WM_APP + 22;
 
 pub struct Instance(HANDLE);
 
@@ -40,6 +41,10 @@ impl Drop for Instance {
 
 pub fn request_exit() -> windows::core::Result<bool> {
     request(EXIT_MESSAGE)
+}
+
+pub fn request_reload() -> windows::core::Result<bool> {
+    request(RELOAD_MESSAGE)
 }
 
 fn request(message: u32) -> windows::core::Result<bool> {

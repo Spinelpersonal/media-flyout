@@ -1,0 +1,25 @@
+# Save, then choose "Reload settings" from the tray menu.
+shortcut = "Ctrl+Space"
+
+# top-center, top-left, top-right, bottom-center, bottom-left, bottom-right
+position = "top-center"
+# active (foreground application's screen), cursor, or primary
+monitor = "active"
+margin = 20 # logical pixels inside the monitor's work area
+
+# Exact GSMTC source application ID, e.g. "Spotify.exe". Empty means automatic.
+preferred_app = ""
+# When enabled, choosing a session also saves its application for future launches.
+remember_preferred_app = false
+
+# dark, light, or system
+theme = "dark"
+animations = true
+show_progress = true
+
+# Set to 0 to keep the flyout open until explicitly dismissed.
+dismiss_after_seconds = 10
+dismiss_on_outside_click = true
+
+# Opt in here, or use "Start with Windows" in the tray menu.
+autostart = false

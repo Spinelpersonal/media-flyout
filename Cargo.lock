@@ -2108,6 +2108,7 @@ version = "0.1.0"
 dependencies = [
  "slint",
  "slint-build",
+ "toml_edit",
  "windows",
  "windows-future",
 ]

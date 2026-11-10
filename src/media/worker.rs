@@ -36,6 +36,8 @@ enum Command {
     Wake,
     Refresh,
     Reconnect,
+    Select(Option<u64>),
+    Prefer(Option<String>),
     Control(Action),
     Shutdown,
 }
@@ -61,6 +63,13 @@ pub struct MediaService {
 
 impl MediaService {
     pub fn start(on_snapshot: impl Fn(Snapshot) + Send + 'static) -> std::io::Result<Self> {
+        Self::with_preference(None, on_snapshot)
+    }
+
+    pub fn with_preference(
+        preferred: Option<String>,
+        on_snapshot: impl Fn(Snapshot) + Send + 'static,
+    ) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::sync_channel(16);
         let notifier = Notifier {
             sender,
@@ -68,7 +77,7 @@ impl MediaService {
         };
         let worker_notifier = notifier.clone();
         let thread = thread::Builder::new().name("media".into()).spawn(move || {
-            if let Err(error) = run(receiver, worker_notifier, &on_snapshot) {
+            if let Err(error) = run(receiver, worker_notifier, preferred, &on_snapshot) {
                 on_snapshot(Snapshot {
                     status: Some(format!("Media service unavailable: {error}")),
                     ..Snapshot::default()
@@ -91,6 +100,13 @@ impl MediaService {
 
     pub fn reconnect(&self) {
         let _ = self.notifier.sender.try_send(Command::Reconnect);
+    }
+
+    pub fn select(&self, id: Option<u64>) {
+        let _ = self.notifier.sender.try_send(Command::Select(id));
+    }
+    pub fn prefer(&self, app: Option<String>) {
+        let _ = self.notifier.sender.try_send(Command::Prefer(app));
     }
 }
 
@@ -348,6 +364,8 @@ fn snapshot(
     manager: &Manager,
     sessions: &mut [WatchedSession],
     status: Option<String>,
+    preferred: Option<&str>,
+    manual: Option<u64>,
 ) -> Snapshot {
     let mut snapshot = Snapshot {
         status,
@@ -365,9 +383,10 @@ fn snapshot(
         .GetCurrentSession()
         .ok()
         .and_then(|native| sessions.iter().find(|s| s.native == native).map(|s| s.id));
-    if let Some(index) = select_session(&snapshot.sessions, current) {
+    if let Some(index) = select_session(&snapshot.sessions, current, preferred, manual) {
         let session = &mut sessions[index];
         snapshot.selected = Some(session.id);
+        snapshot.manual = manual == Some(session.id);
         snapshot.state = snapshot.sessions[index].state;
         snapshot.controls = session.controls();
         if session.dirty.swap(false, Ordering::AcqRel)
@@ -379,21 +398,34 @@ fn snapshot(
         }
         snapshot.track = session.track.clone();
     }
+    for session in sessions {
+        if Some(session.id) != snapshot.selected && session.track.artwork.take().is_some() {
+            session.dirty.store(true, Ordering::Release);
+        }
+    }
     snapshot
 }
 
 fn run(
     receiver: Receiver<Command>,
     notifier: Notifier,
+    mut preferred: Option<String>,
     on_snapshot: &impl Fn(Snapshot),
 ) -> Result<()> {
     let _apartment = Apartment::new()?;
     let mut events = ManagerEvents::new(&notifier).ok();
     let mut sessions = Vec::new();
     let mut next_id = 0;
+    let mut manual = None;
     let mut last = if let Some(events) = &events {
         match synchronize(&events.manager, &mut sessions, &mut next_id, &notifier) {
-            Ok(()) => snapshot(&events.manager, &mut sessions, None),
+            Ok(()) => snapshot(
+                &events.manager,
+                &mut sessions,
+                None,
+                preferred.as_deref(),
+                manual,
+            ),
             Err(error) => Snapshot {
                 status: Some(format!("Sessions unavailable: {error}")),
                 ..Snapshot::default()
@@ -413,6 +445,12 @@ fn run(
         match command {
             Command::Shutdown => break,
             Command::Wake => {}
+            Command::Select(id) => {
+                manual = id.filter(|id| sessions.iter().any(|s| s.id == *id));
+            }
+            Command::Prefer(app) => {
+                preferred = app;
+            }
             Command::Refresh => {
                 if events.is_none() {
                     events = ManagerEvents::new(&notifier).ok();
@@ -446,7 +484,13 @@ fn run(
             sessions.clear();
             status = Some(format!("Sessions unavailable: {error}"));
         }
-        last = snapshot(&events.manager, &mut sessions, status);
+        last = snapshot(
+            &events.manager,
+            &mut sessions,
+            status,
+            preferred.as_deref(),
+            manual,
+        );
         on_snapshot(last.clone());
     }
     Ok(())

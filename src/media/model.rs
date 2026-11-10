@@ -48,6 +48,7 @@ pub struct SessionInfo {
 pub struct Snapshot {
     pub sessions: Vec<SessionInfo>,
     pub selected: Option<u64>,
+    pub manual: bool,
     pub track: Track,
     pub state: PlaybackState,
     pub controls: Controls,
@@ -55,15 +56,28 @@ pub struct Snapshot {
 }
 
 /// Playing sessions outrank a stale Windows "current" session.
-pub fn select_session(sessions: &[SessionInfo], current: Option<u64>) -> Option<usize> {
+pub fn select_session(
+    sessions: &[SessionInfo],
+    current: Option<u64>,
+    preferred_app: Option<&str>,
+    manual: Option<u64>,
+) -> Option<usize> {
+    if let Some(index) = sessions.iter().position(|s| Some(s.id) == manual) {
+        return Some(index);
+    }
     let current_index = sessions.iter().position(|s| Some(s.id) == current);
-    current_index
+    let preferred = sessions
+        .iter()
+        .position(|s| preferred_app.is_some_and(|app| app.eq_ignore_ascii_case(&s.app_id)));
+    preferred
         .filter(|&i| sessions[i].state == PlaybackState::Playing)
+        .or(current_index.filter(|&i| sessions[i].state == PlaybackState::Playing))
         .or_else(|| {
             sessions
                 .iter()
                 .position(|s| s.state == PlaybackState::Playing)
         })
+        .or(preferred)
         .or(current_index)
         .or_else(|| (!sessions.is_empty()).then_some(0))
 }
@@ -86,7 +100,7 @@ mod tests {
             session(1, PlaybackState::Paused),
             session(2, PlaybackState::Playing),
         ];
-        assert_eq!(select_session(&sessions, Some(1)), Some(1));
+        assert_eq!(select_session(&sessions, Some(1), None, None), Some(1));
     }
 
     #[test]
@@ -95,14 +109,36 @@ mod tests {
             session(1, PlaybackState::Playing),
             session(2, PlaybackState::Playing),
         ];
-        assert_eq!(select_session(&sessions, Some(2)), Some(1));
+        assert_eq!(select_session(&sessions, Some(2), None, None), Some(1));
     }
 
     #[test]
     fn handles_empty_and_disappearing_current() {
-        assert_eq!(select_session(&[], Some(9)), None);
+        assert_eq!(select_session(&[], Some(9), None, None), None);
         assert_eq!(
-            select_session(&[session(1, PlaybackState::Paused)], Some(9)),
+            select_session(&[session(1, PlaybackState::Paused)], Some(9), None, None),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn preferences_respect_playback_and_manual_choice() {
+        let sessions = [
+            session(1, PlaybackState::Paused),
+            session(2, PlaybackState::Playing),
+        ];
+        assert_eq!(
+            select_session(&sessions, Some(1), Some("player-1"), None),
+            Some(1)
+        );
+        assert_eq!(select_session(&sessions, Some(2), None, Some(1)), Some(0));
+        assert_eq!(select_session(&sessions, Some(2), None, Some(99)), Some(1));
+        let sessions = [
+            session(1, PlaybackState::Playing),
+            session(2, PlaybackState::Playing),
+        ];
+        assert_eq!(
+            select_session(&sessions, Some(2), Some("PLAYER-1"), None),
             Some(0)
         );
     }

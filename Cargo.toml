@@ -14,9 +14,11 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Controls",
     "Win32_UI_Shell", "Win32_System_Threading", "Win32_Security",
+    "Win32_System_Registry", "Win32_Storage_FileSystem",
 ] }
 windows-future = "0.3.2"
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-18", "renderer-software"] }
+toml_edit = "0.25.19"
 
 [build-dependencies]
 slint-build = { version = "=1.18.1", default-features = false, features = ["compat-1-18"] }

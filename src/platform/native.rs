@@ -33,6 +33,7 @@ use windows::{
 
 const PROXY_MESSAGE: u32 = WM_APP + 1;
 const QUIT_MESSAGE: u32 = WM_APP + 2;
+const REPOSITION_MESSAGE: u32 = WM_APP + 3;
 const TIMER: usize = 1;
 const VISIBLE_INPUT_TIMER: usize = 2;
 type Task = Box<dyn FnOnce() + Send>;
@@ -48,6 +49,8 @@ pub enum NativeEvent {
     TrayCreated,
     Interaction,
     Resume,
+    SettingsChanged,
+    Reload,
 }
 
 #[derive(Default)]
@@ -229,6 +232,8 @@ pub struct NativeWindow {
     event_handler: RefCell<Option<EventHandler>>,
     mouse_was_down: Cell<bool>,
     taskbar_created: Cell<u32>,
+    placement: Cell<(crate::config::Position, crate::config::Monitor, u16)>,
+    outside_click: Cell<bool>,
 }
 
 impl NativeWindow {
@@ -248,6 +253,12 @@ impl NativeWindow {
             event_handler: RefCell::new(None),
             mouse_was_down: Cell::new(false),
             taskbar_created: Cell::new(0),
+            placement: Cell::new((
+                crate::config::Position::TopCenter,
+                crate::config::Monitor::Active,
+                20,
+            )),
+            outside_click: Cell::new(true),
         });
         // SAFETY: The registered procedure is valid for the process lifetime. The
         // stable Rc allocation outlives the HWND, and only its UI thread accesses it.
@@ -302,6 +313,15 @@ impl NativeWindow {
         *self.event_handler.borrow_mut() = Some(Rc::new(handler));
     }
 
+    pub fn configure(&self, settings: &crate::config::Settings) {
+        self.placement
+            .set((settings.position, settings.monitor, settings.margin));
+        self.outside_click.set(settings.dismiss_on_outside_click);
+        if self.visible.get() {
+            self.position_at_top();
+        }
+    }
+
     fn emit(&self, event: NativeEvent) {
         let handler = self.event_handler.borrow().clone();
         if let Some(handler) = handler {
@@ -322,7 +342,7 @@ impl NativeWindow {
             }
             let down = GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
                 || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0;
-            if down && !self.mouse_was_down.replace(down) {
+            if down && !self.mouse_was_down.replace(down) && self.outside_click.get() {
                 let mut point = windows::Win32::Foundation::POINT::default();
                 let mut rect = RECT::default();
                 if GetCursorPos(&mut point).is_ok()
@@ -343,17 +363,38 @@ impl NativeWindow {
     pub fn position_at_top(&self) {
         // SAFETY: All structures are initialized and pointers are valid for the call.
         unsafe {
-            let foreground = GetForegroundWindow();
-            let monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTOPRIMARY);
+            let (position, monitor, margin) = self.placement.get();
+            let monitor = match monitor {
+                crate::config::Monitor::Active => {
+                    MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY)
+                }
+                crate::config::Monitor::Cursor => {
+                    let mut point = windows::Win32::Foundation::POINT::default();
+                    let _ = GetCursorPos(&mut point);
+                    MonitorFromPoint(point, MONITOR_DEFAULTTOPRIMARY)
+                }
+                crate::config::Monitor::Primary => MonitorFromPoint(
+                    windows::Win32::Foundation::POINT::default(),
+                    MONITOR_DEFAULTTOPRIMARY,
+                ),
+            };
             let mut info = MONITORINFO {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
             };
             if GetMonitorInfoW(monitor, &mut info).as_bool() {
                 let size = self.size.get();
-                let left = info.rcWork.left
-                    + ((info.rcWork.right - info.rcWork.left - size.width as i32) / 2).max(0);
-                let top = info.rcWork.top + (20.0 * self.window.scale_factor()) as i32;
+                let (left, top) = super::geometry::place(
+                    (
+                        info.rcWork.left,
+                        info.rcWork.top,
+                        info.rcWork.right,
+                        info.rcWork.bottom,
+                    ),
+                    (size.width as i32, size.height as i32),
+                    (f32::from(margin) * self.window.scale_factor()) as i32,
+                    position,
+                );
                 let _ = SetWindowPos(
                     self.hwnd.get(),
                     Some(HWND_TOPMOST),
@@ -630,6 +671,7 @@ unsafe extern "system" fn window_proc(
                     (452.0 * scale) as u32,
                     (196.0 * scale) as u32,
                 ));
+                let _ = PostMessageW(Some(hwnd), REPOSITION_MESSAGE, WPARAM(0), LPARAM(0));
             }
             WM_TIMER if wparam.0 == TIMER => {
                 let _ = KillTimer(Some(hwnd), TIMER);
@@ -646,12 +688,28 @@ unsafe extern "system" fn window_proc(
             super::instance::EXIT_MESSAGE => {
                 window.emit(NativeEvent::Exit);
             }
-            crate::tray::CALLBACK_MESSAGE => match lparam.0 as u32 {
-                WM_LBUTTONUP => window.emit(NativeEvent::Toggle),
-                WM_RBUTTONUP | WM_CONTEXTMENU => window.emit(NativeEvent::TrayMenu),
+            super::instance::RELOAD_MESSAGE => {
+                window.emit(NativeEvent::Reload);
+            }
+            crate::tray::CALLBACK_MESSAGE => match lparam.0 as u32 & 0xFFFF {
+                windows::Win32::UI::Shell::NIN_SELECT | crate::tray::KEY_SELECT => {
+                    window.emit(NativeEvent::Toggle)
+                }
+                WM_CONTEXTMENU => window.emit(NativeEvent::TrayMenu),
                 _ => {}
             },
-            WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+            WM_DISPLAYCHANGE => {
+                if window.visible.get() {
+                    window.position_at_top();
+                }
+            }
+            WM_SETTINGCHANGE => {
+                if window.visible.get() {
+                    window.position_at_top();
+                }
+                window.emit(NativeEvent::SettingsChanged);
+            }
+            REPOSITION_MESSAGE => {
                 if window.visible.get() {
                     window.position_at_top();
                 }

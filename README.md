@@ -59,6 +59,37 @@ exit. Close any running flyout first:
 cargo test --test lifecycle -- --ignored --test-threads=1
 ```
 
+## Settings and sessions
+
+Settings are created at `%APPDATA%\MediaFlyout\config.toml`. Use the tray's
+**Open settings** command to edit them in Notepad, then **Reload settings** (or
+`media-flyout.exe --reload`). [config.example.toml](config.example.toml) lists all
+values. `--config <path>` selects an isolated file. Unknown/invalid fields produce
+a warning and use defaults; malformed TOML is left intact. Reloading malformed
+TOML retains the last working settings. Saves preserve comments and replace the
+file atomically.
+
+Click the application name above the title to choose a session, or choose
+**Automatic** to follow playing media. Manual selection stays in effect until
+that session closes. Automatic selection prioritizes a playing preferred app,
+Windows' current playing session, then any playing session. Paused preferences
+never displace playing media. Enable **Remember selected application** in the
+tray to save the chosen GSMTC application ID across launches. **Clear application
+preference** restores automatic selection.
+
+The configuration supports six screen positions, foreground/cursor/primary
+monitor selection, a DPI-scaled margin, dark/light/system themes, a customizable
+shortcut, and dismissal time (`0` disables the timeout). A shortcut change is
+registered before releasing the previous one, so a conflict retains the working
+shortcut. There is no configuration watcher or permanent file polling.
+
+**Start with Windows** is disabled by default. Enable it explicitly from the tray
+or set `autostart = true` and reload. This adds only the current user's
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\MediaFlyout` entry, containing
+the quoted executable and configuration paths. Disable it through the same menu
+or set it to `false` and reload before moving/deleting the executable. Other
+startup entries are untouched. Windows may delay startup applications.
+
 ## License
 
 GPL-3.0-only. Slint will be used under its GPLv3 option so the complete distributed

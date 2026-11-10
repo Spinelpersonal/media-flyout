@@ -7,11 +7,18 @@ use windows::{
 };
 
 pub const CALLBACK_MESSAGE: u32 = WM_APP + 10;
+// NIN_KEYSELECT is defined as (NIN_SELECT | NINF_KEY) in the Windows SDK.
+pub const KEY_SELECT: u32 = NIN_SELECT | 1;
 
 #[derive(Clone, Copy)]
 pub enum MenuAction {
     Toggle,
     Exit,
+    OpenConfig,
+    Reload,
+    Autostart,
+    Remember,
+    Automatic,
 }
 
 pub struct TrayIcon {
@@ -69,12 +76,27 @@ impl TrayIcon {
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = CALLBACK_MESSAGE;
         data.hIcon = self.icon;
-        copy_text(&mut data.szTip, "Media Flyout • Ctrl + Space");
+        copy_text(&mut data.szTip, "Media Flyout");
         // SAFETY: The structure and icon are valid for the duration of the call.
         if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
             return Err(windows::core::Error::from_thread());
         }
+        data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+        // SAFETY: This is the same successfully registered notification icon.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
+        }
         Ok(())
+    }
+
+    pub fn set_shortcut(&self, shortcut: &str) {
+        let mut data = self.data();
+        data.uFlags = NIF_TIP;
+        copy_text(&mut data.szTip, &format!("Media Flyout • {shortcut}"));
+        // SAFETY: The bounded, null-terminated tooltip belongs to our tray icon.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+        }
     }
 
     pub fn notify(&self, message: &str) {
@@ -89,13 +111,39 @@ impl TrayIcon {
         }
     }
 
-    pub fn show_menu(&self) -> Option<MenuAction> {
+    pub fn show_menu(&self, settings: &crate::config::Settings) -> Option<MenuAction> {
         // SAFETY: Menu handles are created, used, and destroyed on the UI thread.
         // TrackPopupMenu returns a command instead of dispatching arbitrary messages.
         unsafe {
             let menu = CreatePopupMenu().ok()?;
             let result = (|| {
                 AppendMenuW(menu, MF_STRING, 1, w!("Show / hide flyout"))?;
+                AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+                AppendMenuW(menu, MF_STRING, 3, w!("Open settings"))?;
+                AppendMenuW(menu, MF_STRING, 4, w!("Reload settings"))?;
+                AppendMenuW(
+                    menu,
+                    MF_STRING
+                        | if settings.autostart {
+                            MF_CHECKED
+                        } else {
+                            MF_UNCHECKED
+                        },
+                    5,
+                    w!("Start with Windows"),
+                )?;
+                AppendMenuW(
+                    menu,
+                    MF_STRING
+                        | if settings.remember_preferred_app {
+                            MF_CHECKED
+                        } else {
+                            MF_UNCHECKED
+                        },
+                    6,
+                    w!("Remember selected application"),
+                )?;
+                AppendMenuW(menu, MF_STRING, 7, w!("Clear application preference"))?;
                 AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())?;
                 AppendMenuW(menu, MF_STRING, 2, w!("Exit"))?;
                 let mut point = POINT::default();
@@ -119,6 +167,11 @@ impl TrayIcon {
                 Ok::<_, windows::core::Error>(match command {
                     1 => Some(MenuAction::Toggle),
                     2 => Some(MenuAction::Exit),
+                    3 => Some(MenuAction::OpenConfig),
+                    4 => Some(MenuAction::Reload),
+                    5 => Some(MenuAction::Autostart),
+                    6 => Some(MenuAction::Remember),
+                    7 => Some(MenuAction::Automatic),
                     _ => None,
                 })
             })();

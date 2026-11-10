@@ -1,3 +1,16 @@
+export global Palette {
+    in-out property <bool> light: false;
+    out property <color> surface: light ? #f5f6f9 : #1b1c24;
+    out property <color> elevated: light ? #e7eaf0 : #252630;
+    out property <color> hover: light ? #d8dfe6 : #32343f;
+    out property <color> pressed: light ? #c6d2dc : #3c3e4a;
+    out property <color> border: light ? #d0d5de : #383944;
+    out property <color> text: light ? #202632 : #f4f3f7;
+    out property <color> secondary: light ? #505b68 : #c1c0cb;
+    out property <color> muted: light ? #677280 : #858593;
+    out property <color> accent-text: light ? #286451 : #91b9aa;
+}
+
 component TransportButton inherits Rectangle {
     in property <string> glyph;
     in property <string> label;
@@ -7,16 +20,16 @@ component TransportButton inherits Rectangle {
     width: primary ? 44px : 36px;
     height: primary ? 44px : 36px;
     border-radius: 22px;
-    background: !enabled ? #252630 : primary ? (touch.pressed ? #8bbdb0 : touch.has-hover ? #c7ecde : #ade0cd) : (touch.pressed ? #3c3e4a : touch.has-hover ? #32343f : transparent);
+    background: !enabled ? Palette.elevated : primary ? (touch.pressed ? #8bbdb0 : touch.has-hover ? #c7ecde : #ade0cd) : (touch.pressed ? Palette.pressed : touch.has-hover ? Palette.hover : transparent);
     accessible-role: button;
     accessible-label: label;
     accessible-enabled: enabled;
     accessible-action-default => { if enabled { root.clicked(); } }
     Text {
         text: root.glyph;
-        font-family: "Segoe Fluent Icons";
+        font-family: "Segoe MDL2 Assets";
         font-size: root.primary ? 18px : 17px;
-        color: !root.enabled ? #646570 : root.primary ? #142a24 : #e7e7ee;
+        color: !root.enabled ? Palette.muted : root.primary ? #142a24 : Palette.text;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -28,7 +41,7 @@ export component Flyout inherits Window {
     width: 452px;
     height: 196px;
     no-frame: true;
-    background: #1b1c24;
+    background: Palette.surface;
     default-font-family: "Segoe UI";
     in property <string> track-title: "Nothing playing";
     in property <string> artist: "Open a media player to get started";
@@ -41,11 +54,15 @@ export component Flyout inherits Window {
     in property <bool> can-toggle;
     in property <bool> can-previous;
     in property <bool> can-next;
+    in property <[string]> session-labels;
+    in property <int> selected-session: 0;
+    in-out property <bool> session-menu: false;
     callback toggle-playback;
     callback previous;
     callback next;
     callback dismiss;
     callback media-updated;
+    callback select-session(int);
 
     FocusScope {
         key-pressed(event) => {
@@ -58,8 +75,8 @@ export component Flyout inherits Window {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         border-radius: 16px;
         border-width: 1px;
-        border-color: #383944;
-        background: #1b1c24;
+        border-color: Palette.border;
+        background: Palette.surface;
 
         Rectangle {
             x: 20px; y: 20px; width: 106px; height: 106px;
@@ -69,7 +86,7 @@ export component Flyout inherits Window {
             if root.has-artwork: Image { source: root.artwork; image-fit: cover; width: 100%; height: 100%; }
             if !root.has-artwork: Text {
                 text: "\u{e8d6}";
-                font-family: "Segoe Fluent Icons";
+                font-family: "Segoe MDL2 Assets";
                 font-size: 36px;
                 color: #8ba99f;
                 horizontal-alignment: center;
@@ -79,22 +96,22 @@ export component Flyout inherits Window {
 
         Text {
             x: 146px; y: 20px; width: 246px; height: 15px;
-            text: root.source; color: #91b9aa; font-size: 10px; font-weight: 600;
+            text: root.source; color: Palette.accent-text; font-size: 10px; font-weight: 600;
             overflow: elide; wrap: no-wrap;
         }
         Text {
             x: 146px; y: 43px; width: 286px; height: 26px;
-            text: root.track-title; color: #f4f3f7; font-size: 19px; font-weight: 600;
+            text: root.track-title; color: Palette.text; font-size: 19px; font-weight: 600;
             overflow: elide; wrap: no-wrap;
         }
         Text {
             x: 146px; y: 75px; width: 286px; height: 20px;
-            text: root.artist; color: #c1c0cb; font-size: 13px;
+            text: root.artist; color: Palette.secondary; font-size: 13px;
             overflow: elide; wrap: no-wrap;
         }
         Text {
             x: 146px; y: 100px; width: 286px; height: 18px;
-            text: root.album; color: #858593; font-size: 11px;
+            text: root.album; color: Palette.muted; font-size: 11px;
             overflow: elide; wrap: no-wrap;
         }
         HorizontalLayout {
@@ -108,19 +125,44 @@ export component Flyout inherits Window {
         Text {
             x: 20px; y: 143px; width: 106px; height: 16px;
             text: root.playing ? "PLAYING" : root.can-toggle ? "PAUSED" : "READY";
-            color: #80828d; font-size: 9px; horizontal-alignment: center;
+            color: Palette.muted; font-size: 9px; horizontal-alignment: center;
         }
         Rectangle {
             x: parent.width - 32px; y: 12px; width: 20px; height: 20px;
             border-radius: 5px;
-            background: close-touch.has-hover ? #373842 : transparent;
-            Text { text: "\u{e711}"; font-family: "Segoe Fluent Icons"; font-size: 9px; color: #9c9ca9; horizontal-alignment: center; vertical-alignment: center; }
+            background: close-touch.has-hover ? Palette.hover : transparent;
+            Text { text: "\u{e711}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.muted; horizontal-alignment: center; vertical-alignment: center; }
             close-touch := TouchArea { clicked => { root.dismiss(); } }
         }
         if root.status != "": Text {
             x: 302px; y: 134px; width: 130px; height: 40px;
             text: root.status; color: #dcbb8a; font-size: 10px; wrap: word-wrap;
             overflow: elide;
+        }
+
+        Rectangle {
+            x: 140px; y: 12px; width: 254px; height: 28px;
+            background: transparent;
+            Text { x: parent.width - 14px; width: 12px; text: "\u{e70d}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.muted; vertical-alignment: center; }
+            TouchArea { clicked => { root.session-menu = !root.session-menu; } }
+        }
+        if root.session-menu: Rectangle {
+            x: 12px; y: 40px; width: parent.width - 24px; height: 144px;
+            border-radius: 10px; border-width: 1px; border-color: Palette.border;
+            background: Palette.elevated;
+            clip: true;
+            Flickable {
+                x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px;
+                content-height: root.session-labels.length * 34px;
+                content-width: self.width;
+                for label[index] in root.session-labels: Rectangle {
+                    x: 0px; y: index * 34px; width: parent.width; height: 34px;
+                    border-radius: 6px;
+                    background: row-touch.has-hover ? Palette.hover : index == root.selected-session ? Palette.pressed : transparent;
+                    Text { x: 12px; width: parent.width - 24px; text: label; font-size: 12px; color: Palette.text; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
+                    row-touch := TouchArea { clicked => { root.session-menu = false; root.select-session(index); } }
+                }
+            }
         }
     }
 }
