@@ -1,9 +1,15 @@
 use media_flyout::media;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let argument = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "--diagnose".into());
+    let Some(argument) = std::env::args().nth(1) else {
+        return media_flyout::ui::run(None);
+    };
+    if argument == "--preview" {
+        let path = std::env::args()
+            .nth(2)
+            .ok_or("--preview requires an output .bmp path")?;
+        return media_flyout::ui::run(Some(path.into()));
+    }
     let (sender, receiver) = std::sync::mpsc::channel();
     let media = media::MediaService::start(move |snapshot| {
         let _ = sender.send(snapshot);

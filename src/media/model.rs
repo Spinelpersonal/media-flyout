@@ -18,6 +18,23 @@ pub struct Track {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub artwork: Option<std::sync::Arc<Artwork>>,
+}
+
+pub struct Artwork {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl std::fmt::Debug for Artwork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Artwork")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("bytes", &self.rgba.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

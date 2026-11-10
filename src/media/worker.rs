@@ -250,6 +250,10 @@ impl WatchedSession {
                 .AlbumTitle()
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_default(),
+            artwork: properties
+                .Thumbnail()
+                .ok()
+                .and_then(|reference| super::artwork::load(reference).ok().flatten()),
         };
         Ok(())
     }

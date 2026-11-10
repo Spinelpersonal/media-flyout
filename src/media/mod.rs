@@ -1,3 +1,4 @@
+mod artwork;
 mod model;
 mod worker;
 
