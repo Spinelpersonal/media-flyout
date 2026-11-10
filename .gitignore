@@ -1,0 +1,7 @@
+/target/
+/.scratch/
+*.pdb
+*.log
+*.tmp
+/.vs/
+/.idea/

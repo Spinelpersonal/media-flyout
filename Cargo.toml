@@ -1,0 +1,28 @@
+[package]
+name = "media-flyout"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "A lightweight, event-driven Windows media flyout"
+license = "GPL-3.0-only"
+repository = "https://github.com/Spinelpersonal/media-flyout"
+
+[dependencies]
+windows = { version = "0.62.2", features = [
+    "Foundation", "Foundation_Collections", "Media_Control",
+    "Storage_Streams", "Win32_Foundation", "Win32_System_WinRT",
+] }
+windows-future = "0.3.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
