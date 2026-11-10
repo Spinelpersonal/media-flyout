@@ -34,7 +34,21 @@ use windows::{
 const PROXY_MESSAGE: u32 = WM_APP + 1;
 const QUIT_MESSAGE: u32 = WM_APP + 2;
 const TIMER: usize = 1;
+const VISIBLE_INPUT_TIMER: usize = 2;
 type Task = Box<dyn FnOnce() + Send>;
+type EventHandler = Rc<dyn Fn(NativeEvent)>;
+
+#[derive(Clone, Copy)]
+pub enum NativeEvent {
+    Toggle,
+    Show,
+    Dismiss,
+    Exit,
+    TrayMenu,
+    TrayCreated,
+    Interaction,
+    Resume,
+}
 
 #[derive(Default)]
 struct Shared {
@@ -154,6 +168,9 @@ impl Platform for Backend {
                 if result == 0 {
                     break;
                 }
+                // Refresh Slint's cached monotonic clock after an arbitrarily long
+                // blocking wait, before callbacks create timers from this message.
+                slint::platform::update_timers_and_animations();
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
@@ -209,6 +226,9 @@ pub struct NativeWindow {
     tracking_mouse: Cell<bool>,
     pixels: RefCell<Vec<Bgra>>,
     shared: Arc<Shared>,
+    event_handler: RefCell<Option<EventHandler>>,
+    mouse_was_down: Cell<bool>,
+    taskbar_created: Cell<u32>,
 }
 
 impl NativeWindow {
@@ -225,6 +245,9 @@ impl NativeWindow {
             tracking_mouse: Cell::new(false),
             pixels: RefCell::new(Vec::new()),
             shared,
+            event_handler: RefCell::new(None),
+            mouse_was_down: Cell::new(false),
+            taskbar_created: Cell::new(0),
         });
         // SAFETY: The registered procedure is valid for the process lifetime. The
         // stable Rc allocation outlives the HWND, and only its UI thread accesses it.
@@ -255,6 +278,9 @@ impl NativeWindow {
                 Some(Rc::as_ptr(&native).cast()),
             )?;
             native.hwnd.set(hwnd);
+            native
+                .taskbar_created
+                .set(RegisterWindowMessageW(w!("TaskbarCreated")));
             native.shared.hwnd.store(hwnd.0 as isize, Ordering::Release);
             let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
             native.dispatch(WindowEvent::ScaleFactorChanged {
@@ -270,6 +296,48 @@ impl NativeWindow {
 
     pub fn handle(&self) -> HWND {
         self.hwnd.get()
+    }
+
+    pub fn set_event_handler(&self, handler: impl Fn(NativeEvent) + 'static) {
+        *self.event_handler.borrow_mut() = Some(Rc::new(handler));
+    }
+
+    fn emit(&self, event: NativeEvent) {
+        let handler = self.event_handler.borrow().clone();
+        if let Some(handler) = handler {
+            handler(event);
+        }
+    }
+
+    fn check_visible_input(&self) {
+        if !self.visible.get() {
+            return;
+        }
+        // SAFETY: These read-only input queries require no pointers other than our
+        // initialized POINT/RECT. They run only while the flyout is visible.
+        unsafe {
+            if GetAsyncKeyState(i32::from(VK_ESCAPE.0)) < 0 {
+                self.emit(NativeEvent::Dismiss);
+                return;
+            }
+            let down = GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
+                || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0;
+            if down && !self.mouse_was_down.replace(down) {
+                let mut point = windows::Win32::Foundation::POINT::default();
+                let mut rect = RECT::default();
+                if GetCursorPos(&mut point).is_ok()
+                    && GetWindowRect(self.hwnd.get(), &mut rect).is_ok()
+                    && (point.x < rect.left
+                        || point.x >= rect.right
+                        || point.y < rect.top
+                        || point.y >= rect.bottom)
+                {
+                    self.emit(NativeEvent::Dismiss);
+                }
+            } else {
+                self.mouse_was_down.set(down);
+            }
+        }
     }
 
     pub fn position_at_top(&self) {
@@ -422,6 +490,15 @@ impl WindowAdapter for NativeWindow {
         }
         // SAFETY: The HWND is valid and the window is deliberately shown without focus.
         unsafe {
+            if visible {
+                self.mouse_was_down.set(
+                    GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
+                        || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0,
+                );
+                SetTimer(Some(self.hwnd.get()), VISIBLE_INPUT_TIMER, 50, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd.get()), VISIBLE_INPUT_TIMER);
+            }
             let _ = ShowWindow(
                 self.hwnd.get(),
                 if visible { SW_SHOWNOACTIVATE } else { SW_HIDE },
@@ -496,6 +573,10 @@ unsafe extern "system" fn window_proc(
         let Some(window) = pointer.as_ref() else {
             return DefWindowProcW(hwnd, message, wparam, lparam);
         };
+        if message == window.taskbar_created.get() && message != 0 {
+            window.emit(NativeEvent::TrayCreated);
+            return LRESULT(0);
+        }
         match message {
             WM_ERASEBKGND => return LRESULT(1),
             WM_PAINT => {
@@ -526,6 +607,7 @@ unsafe extern "system" fn window_proc(
                 window.dispatch(WindowEvent::PointerExited);
             }
             WM_LBUTTONDOWN => {
+                window.emit(NativeEvent::Interaction);
                 SetCapture(hwnd);
                 window.dispatch(WindowEvent::PointerPressed {
                     position: window.pointer_position(lparam),
@@ -551,6 +633,31 @@ unsafe extern "system" fn window_proc(
             }
             WM_TIMER if wparam.0 == TIMER => {
                 let _ = KillTimer(Some(hwnd), TIMER);
+            }
+            WM_TIMER if wparam.0 == VISIBLE_INPUT_TIMER => {
+                window.check_visible_input();
+            }
+            WM_HOTKEY if wparam.0 == 1 || wparam.0 == 2 => {
+                window.emit(NativeEvent::Toggle);
+            }
+            super::instance::SHOW_MESSAGE => {
+                window.emit(NativeEvent::Show);
+            }
+            super::instance::EXIT_MESSAGE => {
+                window.emit(NativeEvent::Exit);
+            }
+            crate::tray::CALLBACK_MESSAGE => match lparam.0 as u32 {
+                WM_LBUTTONUP => window.emit(NativeEvent::Toggle),
+                WM_RBUTTONUP | WM_CONTEXTMENU => window.emit(NativeEvent::TrayMenu),
+                _ => {}
+            },
+            WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+                if window.visible.get() {
+                    window.position_at_top();
+                }
+            }
+            WM_POWERBROADCAST if wparam.0 == 0x12 || wparam.0 == 0x07 => {
+                window.emit(NativeEvent::Resume);
             }
             PROXY_MESSAGE => {
                 window.shared.drain();

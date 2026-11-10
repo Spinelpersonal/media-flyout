@@ -3,8 +3,10 @@
 A compact Windows 10/11 media controller written in Rust. Development follows the
 phases in [prompt.md](prompt.md).
 
-Running the executable without arguments opens the Slint flyout, with album art,
-metadata, and playback controls. Its native Win32 backend presents Slint's
+Running the executable starts it in the background. Press **Ctrl + Space** to
+toggle the flyout, or use the tray icon. It dismisses after ten seconds, on Escape,
+or on an observed outside click; closing it keeps the background process running.
+Its native Win32 backend presents Slint's
 software-rendered pixels directly through GDI, with no GPU renderer or extra
 windowing framework. The window uses the foreground application's monitor and
 does not take keyboard focus.
@@ -28,6 +30,8 @@ cargo test
 cargo build --release
 .\target\release\media-flyout.exe --diagnose
 .\target\release\media-flyout.exe --watch
+.\target\release\media-flyout.exe --show
+.\target\release\media-flyout.exe --quit
 .\target\release\media-flyout.exe --preview preview.bmp
 ```
 
@@ -38,6 +42,22 @@ discoverable. No media session is a normal, empty result.
 `--preview` briefly opens the real flyout, saves its own Slint-rendered bitmap,
 and exits. Artwork uses Windows Imaging Component, is decoded on the media
 worker, and is reduced to at most 256 × 256 pixels before reaching the UI.
+
+The shortcut uses `RegisterHotKey` with repeat suppression. If it is already in
+use, the tray icon remains available. Escape and outside clicks are checked every
+50 ms **only while visible**: this allows dismissal without taking focus or
+installing a global input hook. Very short outside clicks may be missed. There
+are no input checks or render timers while hidden. Media updates remain driven by
+Windows events. The tray icon is restored if Explorer restarts, and a resume
+notification reconnects the media manager.
+
+The optional desktop lifecycle integration test starts a separate flyout and
+checks hidden startup, window styles, reuse by a second launch, dismissal, and
+exit. Close any running flyout first:
+
+```powershell
+cargo test --test lifecycle -- --ignored --test-threads=1
+```
 
 ## License
 

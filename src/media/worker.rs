@@ -34,6 +34,8 @@ pub enum Action {
 
 enum Command {
     Wake,
+    Refresh,
+    Reconnect,
     Control(Action),
     Shutdown,
 }
@@ -81,6 +83,14 @@ impl MediaService {
 
     pub fn control(&self, action: Action) {
         let _ = self.notifier.sender.try_send(Command::Control(action));
+    }
+
+    pub fn refresh(&self) {
+        let _ = self.notifier.sender.try_send(Command::Refresh);
+    }
+
+    pub fn reconnect(&self) {
+        let _ = self.notifier.sender.try_send(Command::Reconnect);
     }
 }
 
@@ -364,6 +374,7 @@ fn snapshot(
             && let Err(error) = session.read_track()
         {
             session.track = Track::default();
+            session.dirty.store(true, Ordering::Release);
             snapshot.status = Some(format!("Metadata unavailable: {error}"));
         }
         snapshot.track = session.track.clone();
@@ -377,17 +388,43 @@ fn run(
     on_snapshot: &impl Fn(Snapshot),
 ) -> Result<()> {
     let _apartment = Apartment::new()?;
-    let events = ManagerEvents::new(&notifier)?;
+    let mut events = ManagerEvents::new(&notifier).ok();
     let mut sessions = Vec::new();
     let mut next_id = 0;
-    synchronize(&events.manager, &mut sessions, &mut next_id, &notifier)?;
-    let mut last = snapshot(&events.manager, &mut sessions, None);
+    let mut last = if let Some(events) = &events {
+        match synchronize(&events.manager, &mut sessions, &mut next_id, &notifier) {
+            Ok(()) => snapshot(&events.manager, &mut sessions, None),
+            Err(error) => Snapshot {
+                status: Some(format!("Sessions unavailable: {error}")),
+                ..Snapshot::default()
+            },
+        }
+    } else {
+        Snapshot {
+            status: Some(
+                "Windows media service is unavailable. Reopen the flyout to retry.".into(),
+            ),
+            ..Snapshot::default()
+        }
+    };
     on_snapshot(last.clone());
     while let Ok(command) = receiver.recv() {
         let mut status = None;
         match command {
             Command::Shutdown => break,
             Command::Wake => {}
+            Command::Refresh => {
+                if events.is_none() {
+                    events = ManagerEvents::new(&notifier).ok();
+                }
+                notifier.pending.fetch_or(TOPOLOGY, Ordering::Release);
+            }
+            Command::Reconnect => {
+                sessions.clear();
+                drop(events.take());
+                events = ManagerEvents::new(&notifier).ok();
+                notifier.pending.fetch_or(TOPOLOGY, Ordering::Release);
+            }
             Command::Control(action) => {
                 if let Some(session) = sessions.iter().find(|s| Some(s.id) == last.selected) {
                     status = match session.control(action) {
@@ -399,6 +436,10 @@ fn run(
             }
         }
         let flags = notifier.pending.swap(0, Ordering::AcqRel);
+        let Some(events) = &events else {
+            on_snapshot(last.clone());
+            continue;
+        };
         if flags & TOPOLOGY != 0
             && let Err(error) = synchronize(&events.manager, &mut sessions, &mut next_id, &notifier)
         {
