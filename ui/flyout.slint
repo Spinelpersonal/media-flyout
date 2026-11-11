@@ -149,8 +149,8 @@ export component Flyout inherits Window {
             Text { x: 0px; y: 0px; width: parent.width / 2; height: 14px; text: root.elapsed; font-size: 10px; color: Palette.muted; horizontal-alignment: left; }
             Text { x: parent.width / 2; y: 0px; width: parent.width / 2; height: 14px; text: root.duration; font-size: 10px; color: Palette.muted; horizontal-alignment: right; }
             Rectangle {
-                y: 25px; height: 2px; width: parent.width; border-radius: 1px; background: Palette.border;
-                Rectangle { height: parent.height; width: parent.width * root.progress; border-radius: 1px; background: Palette.accent-text; }
+                x: 0px; y: 25px; height: 2px; width: parent.width; border-radius: 1px; background: Palette.border;
+                Rectangle { x: 0px; y: 0px; height: parent.height; width: parent.width * root.progress; border-radius: 1px; background: Palette.accent-text; }
             }
         }
 
