@@ -56,6 +56,7 @@ pub enum NativeEvent {
     TrayMenu,
     TrayCreated,
     Interaction,
+    CancelInteraction,
     Resume,
     SettingsChanged,
     Reload,
@@ -239,6 +240,7 @@ pub struct NativeWindow {
     shared: Arc<Shared>,
     event_handler: RefCell<Option<EventHandler>>,
     mouse_was_down: Cell<bool>,
+    pointer_down: Cell<bool>,
     taskbar_created: Cell<u32>,
     placement: Cell<(crate::config::Position, crate::config::Monitor, u16)>,
     outside_click: Cell<bool>,
@@ -263,6 +265,7 @@ impl NativeWindow {
             shared,
             event_handler: RefCell::new(None),
             mouse_was_down: Cell::new(false),
+            pointer_down: Cell::new(false),
             taskbar_created: Cell::new(0),
             placement: Cell::new((
                 crate::config::Position::TopCenter,
@@ -616,6 +619,15 @@ impl WindowAdapter for NativeWindow {
                 SetTimer(Some(self.hwnd.get()), VISIBLE_INPUT_TIMER, 50, None);
             } else {
                 let _ = KillTimer(Some(self.hwnd.get()), VISIBLE_INPUT_TIMER);
+                if self.pointer_down.replace(false) {
+                    self.dispatch(WindowEvent::PointerReleased {
+                        position: LogicalPosition::new(-1.0, -1.0),
+                        button: PointerEventButton::Left,
+                    });
+                    if GetCapture() == self.hwnd.get() {
+                        let _ = ReleaseCapture();
+                    }
+                }
             }
             if self.animation_enabled.get() && (was_visible != visible || self.fade.get().is_some())
             {
@@ -752,6 +764,7 @@ unsafe extern "system" fn window_proc(
             }
             WM_LBUTTONDOWN => {
                 window.emit(NativeEvent::Interaction);
+                window.pointer_down.set(true);
                 SetCapture(hwnd);
                 window.dispatch(WindowEvent::PointerPressed {
                     position: window.pointer_position(lparam),
@@ -759,11 +772,25 @@ unsafe extern "system" fn window_proc(
                 });
             }
             WM_LBUTTONUP => {
+                window.pointer_down.set(false);
                 let _ = ReleaseCapture();
                 window.dispatch(WindowEvent::PointerReleased {
                     position: window.pointer_position(lparam),
                     button: PointerEventButton::Left,
                 });
+            }
+            WM_CAPTURECHANGED | WM_CANCELMODE => {
+                if window.pointer_down.replace(false) {
+                    window.emit(NativeEvent::CancelInteraction);
+                    // Reset Slint's pressed state without activating a control.
+                    window.dispatch(WindowEvent::PointerReleased {
+                        position: LogicalPosition::new(-1.0, -1.0),
+                        button: PointerEventButton::Left,
+                    });
+                    if GetCapture() == hwnd {
+                        let _ = ReleaseCapture();
+                    }
+                }
             }
             WM_MOUSEWHEEL => {
                 let mut point = windows::Win32::Foundation::POINT {

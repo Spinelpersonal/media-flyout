@@ -39,6 +39,11 @@ enum Command {
     Select(Option<u64>),
     Prefer(Option<String>),
     Control(Action),
+    Seek {
+        session_id: u64,
+        revision: u64,
+        fraction: f64,
+    },
     Shutdown,
 }
 
@@ -94,6 +99,14 @@ impl MediaService {
 
     pub fn control(&self, action: Action) {
         let _ = self.notifier.sender.try_send(Command::Control(action));
+    }
+
+    pub fn seek(&self, session_id: u64, revision: u64, fraction: f64) {
+        let _ = self.notifier.sender.try_send(Command::Seek {
+            session_id,
+            revision,
+            fraction,
+        });
     }
 
     pub fn refresh(&self) {
@@ -320,6 +333,7 @@ impl WatchedSession {
                 },
             previous: controls.IsPreviousEnabled().unwrap_or(false),
             next: controls.IsNextEnabled().unwrap_or(false),
+            seek: controls.IsPlaybackPositionEnabled().unwrap_or(false),
         }
     }
 
@@ -339,18 +353,42 @@ impl WatchedSession {
             + 116_444_736_000_000_000;
         let age = i128::try_from(now).ok()?.checked_sub(i128::from(updated))?;
         let reliable_clock = (0..=864_000_000_000).contains(&age);
-        Timeline::from_ticks(
-            timeline.StartTime().ok()?.Duration,
-            timeline.EndTime().ok()?.Duration,
-            timeline.Position().ok()?.Duration,
-            rate,
-            self.state() == PlaybackState::Playing && reliable_clock,
-            if reliable_clock {
-                Duration::from_nanos(age as u64 * 100)
-            } else {
-                Duration::ZERO
-            },
+        Some(
+            Timeline::from_ticks(
+                timeline.StartTime().ok()?.Duration,
+                timeline.EndTime().ok()?.Duration,
+                timeline.Position().ok()?.Duration,
+                rate,
+                self.state() == PlaybackState::Playing && reliable_clock,
+                if reliable_clock {
+                    Duration::from_nanos(age as u64 * 100)
+                } else {
+                    Duration::ZERO
+                },
+            )?
+            .with_seek_range(
+                timeline.MinSeekTime().ok()?.Duration,
+                timeline.MaxSeekTime().ok()?.Duration,
+            ),
         )
+    }
+
+    fn seek(&self, fraction: f64) -> Result<bool> {
+        if !self
+            .native
+            .GetPlaybackInfo()?
+            .Controls()?
+            .IsPlaybackPositionEnabled()?
+        {
+            return Ok(false);
+        }
+        let Some(position) = self
+            .timeline()
+            .and_then(|timeline| timeline.seek_ticks(fraction))
+        else {
+            return Ok(false);
+        };
+        wait(self.native.TryChangePlaybackPositionAsync(position)?)
     }
 
     fn control(&self, action: Action) -> Result<bool> {
@@ -563,6 +601,10 @@ fn snapshot(
         snapshot.state = snapshot.sessions[index].state;
         snapshot.controls = session.controls();
         snapshot.timeline = session.timeline();
+        snapshot.controls.seek &= snapshot
+            .timeline
+            .as_ref()
+            .is_some_and(|t| t.seek_ticks(0.0).is_some());
         if session.dirty.swap(false, Ordering::AcqRel) {
             session.revision = session.revision.wrapping_add(1);
             if let Err(error) = session.read_track() {
@@ -573,6 +615,7 @@ fn snapshot(
             }
         }
         snapshot.track = session.track.clone();
+        snapshot.track_revision = session.revision;
         if let (Some(worker), Some(reference)) = (artwork, session.thumbnail.take())
             && let Ok(reference) = windows::core::AgileReference::new(&reference)
         {
@@ -669,6 +712,26 @@ fn run(
                     };
                 } else {
                     status = Some("No media session is available".into());
+                }
+            }
+            Command::Seek {
+                session_id,
+                revision,
+                fraction,
+            } => {
+                // A drag belongs to the session and track visible when it began.
+                // Ignore it if selection or metadata changed before dispatch.
+                if let Some(session) = sessions.iter().find(|s| {
+                    s.id == session_id
+                        && Some(s.id) == last.selected
+                        && s.revision == revision
+                        && !s.dirty.load(Ordering::Acquire)
+                }) {
+                    status = match session.seek(fraction) {
+                        Ok(true) => None,
+                        Ok(false) => Some("This player did not accept seeking".into()),
+                        Err(error) => Some(format!("Player unavailable: {error}")),
+                    };
                 }
             }
         }

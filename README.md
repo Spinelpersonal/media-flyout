@@ -5,7 +5,7 @@ and native Windows APIs. It runs quietly in the tray and opens with **Ctrl + Spa
 No account connection or Spotify Web API is required.
 
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
-- Previous, play/pause, and next controls that follow the player's capabilities.
+- Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
 - Automatic selection of playing media, manual session switching, and saved app preferences.
 - Dark, light, and system themes; rounded corners; short optional transitions.
 - Configurable shortcuts, screen position, monitor, margin, and dismissal behavior.
@@ -90,8 +90,10 @@ autostart = false
 
 The remaining options are booleans. Animations also respect Windows' client-area
 animation setting. Unsupported, missing, or unreliable timelines are omitted.
-Progress is estimated between Windows events, clamps to the duration, and does
-not provide seeking.
+Progress is estimated between Windows events and clamps to the duration. Click
+the progress bar or drag it to seek forward or backward. Dragging previews the
+target time and seeks when released, within the player's supported seek range.
+Players without seeking support keep a read-only progress bar.
 
 Invalid fields use their defaults with a warning; valid fields remain usable.
 Malformed TOML is never overwritten, and a malformed reload retains the last
@@ -179,7 +181,8 @@ cargo build --locked --release
 
 The ordinary test suite covers selection priorities, same-app preferences,
 configuration validation and safe edits, shortcut parsing, CLI arguments, timeline
-validation/extrapolation, startup quoting, native pixel blending, and screen geometry.
+validation/extrapolation and seek ranges, progress-bar pointer interactions,
+startup quoting, native pixel blending, and screen geometry.
 
 Two desktop integration suites are ignored by default because they require real
 Windows services and an interactive shell. Close any running flyout before running
@@ -191,7 +194,7 @@ cargo test --locked --test lifecycle -- --ignored --test-threads=1
 ```
 
 The media suite publishes silent test sessions and verifies real GSMTC discovery,
-Unicode metadata events, play/pause/next/previous delivery, timelines, unsupported
+Unicode metadata events, play/pause/next/previous and seek delivery, timelines, unsupported
 controls, switching between two sessions from the same application, wrapper
 reconciliation, and removal. It does not send commands to personal media players.
 The lifecycle suite verifies hidden startup, single-instance reuse, timeout,

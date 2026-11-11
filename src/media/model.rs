@@ -11,6 +11,7 @@ pub struct Controls {
     pub play_pause: bool,
     pub previous: bool,
     pub next: bool,
+    pub seek: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -50,6 +51,7 @@ pub struct Snapshot {
     pub selected: Option<u64>,
     pub manual: bool,
     pub track: Track,
+    pub track_revision: u64,
     pub state: PlaybackState,
     pub controls: Controls,
     pub timeline: Option<super::Timeline>,

@@ -72,6 +72,11 @@ keeps input hooks out of the process and preserves foreground focus. Very short
 input can be missed. Progress uses a separate one-second display timer only when
 visible and advancing. It extrapolates the last reported position using playback
 rate and the provider's update timestamp, then clamps to the valid duration.
+The progress bar previews pointer drags locally and sends one seek on release.
+Seeks use absolute 100 ns ticks, clamp to the provider's seek range, and recheck
+the player's capability on the media worker. Session IDs and metadata revisions
+prevent a drag from seeking a different session or track. Dismissal pauses while
+dragging and restarts on release.
 
 ## Configuration and lifecycle
 

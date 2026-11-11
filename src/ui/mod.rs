@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -34,6 +34,8 @@ struct Controller {
     dismiss_timer: slint::Timer,
     progress_timer: slint::Timer,
     latest: RefCell<Snapshot>,
+    seek_target: Cell<Option<(u64, u64)>>,
+    seek_fraction: Cell<f64>,
     artwork: RefCell<Option<Arc<Artwork>>>,
     warnings: RefCell<Vec<String>>,
     config: RefCell<ConfigStore>,
@@ -57,6 +59,8 @@ impl Controller {
         self.dismiss_timer.stop();
         self.progress_timer.stop();
         self.flyout.set_session_menu(false);
+        self.flyout.set_seeking(false);
+        self.seek_target.take();
         let _ = self.flyout.hide();
     }
 
@@ -69,6 +73,10 @@ impl Controller {
     }
 
     fn arm_dismiss(self: &Rc<Self>) {
+        if self.flyout.get_seeking() {
+            self.dismiss_timer.stop();
+            return;
+        }
         let seconds = self.config.borrow().settings.dismiss_after_seconds;
         if seconds == 0 {
             self.dismiss_timer.stop();
@@ -93,6 +101,48 @@ impl Controller {
         self.arm_dismiss();
     }
 
+    fn begin_seek(&self) {
+        let snapshot = self.latest.borrow();
+        self.seek_target.set(
+            snapshot
+                .selected
+                .filter(|_| self.flyout.get_can_seek())
+                .map(|id| (id, snapshot.track_revision)),
+        );
+        self.flyout.set_seeking(self.seek_target.get().is_some());
+        self.dismiss_timer.stop();
+    }
+
+    fn preview_seek(&self, fraction: f32) {
+        if !self.flyout.get_seeking() {
+            return;
+        }
+        let snapshot = self.latest.borrow();
+        if let Some(timeline) = &snapshot.timeline
+            && let Some(position) = timeline.seek_position(f64::from(fraction))
+        {
+            self.seek_fraction.set(f64::from(fraction));
+            self.flyout
+                .set_progress((position.as_secs_f64() / timeline.duration.as_secs_f64()) as f32);
+            self.flyout
+                .set_elapsed(media::timestamp(position).as_str().into());
+        }
+    }
+
+    fn finish_seek(self: &Rc<Self>, commit: bool) {
+        self.flyout.set_seeking(false);
+        if let Some((id, revision)) = self.seek_target.take()
+            && commit
+            && let Some(service) = &*self.service.borrow()
+        {
+            service.seek(id, revision, self.seek_fraction.get());
+        }
+        if !commit {
+            self.refresh_progress();
+        }
+        self.arm_dismiss();
+    }
+
     fn native_event(self: &Rc<Self>, event: NativeEvent) {
         match event {
             NativeEvent::Toggle => self.toggle(),
@@ -104,6 +154,11 @@ impl Controller {
                 let _ = slint::quit_event_loop();
             }
             NativeEvent::Interaction => self.arm_dismiss(),
+            NativeEvent::CancelInteraction => {
+                if self.flyout.get_seeking() {
+                    self.finish_seek(false);
+                }
+            }
             NativeEvent::TrayCreated => {
                 let _ = self.tray.add();
                 self.update_tooltip();
@@ -278,6 +333,16 @@ impl Controller {
     }
 
     fn update(self: &Rc<Self>, snapshot: Snapshot) {
+        if self.seek_target.get().is_some_and(|(id, revision)| {
+            snapshot.selected != Some(id)
+                || snapshot.track_revision != revision
+                || !snapshot.controls.seek
+                || snapshot.timeline.is_none()
+                || snapshot.status.is_some()
+                || !self.config.borrow().settings.show_progress
+        }) {
+            self.finish_seek(false);
+        }
         present(&self.flyout, &snapshot);
         if let Some(warning) = self.warnings.borrow().first() {
             self.flyout.set_status(warning.as_str().into());
@@ -359,6 +424,11 @@ impl Controller {
             .as_ref()
             .filter(|_| self.config.borrow().settings.show_progress);
         self.flyout.set_has_timeline(timeline.is_some());
+        self.flyout
+            .set_can_seek(timeline.is_some() && snapshot.controls.seek);
+        if self.flyout.get_seeking() {
+            return;
+        }
         if let Some(timeline) = timeline {
             let position = timeline.current_position();
             self.flyout
@@ -419,6 +489,8 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         dismiss_timer: slint::Timer::default(),
         progress_timer: slint::Timer::default(),
         latest: RefCell::new(Snapshot::default()),
+        seek_target: Cell::new(None),
+        seek_fraction: Cell::new(0.0),
         artwork: RefCell::new(None),
         warnings: RefCell::new(Vec::new()),
         config: RefCell::new(config),
@@ -465,6 +537,30 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     controller.flyout.on_select_session(move |index| {
         if let Some(controller) = weak.upgrade() {
             controller.select(index);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_seek_started(move || {
+        if let Some(controller) = weak.upgrade() {
+            controller.begin_seek();
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_seek_preview(move |fraction| {
+        if let Some(controller) = weak.upgrade() {
+            controller.preview_seek(fraction);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_seek_committed(move || {
+        if let Some(controller) = weak.upgrade() {
+            controller.finish_seek(true);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_seek_cancelled(move || {
+        if let Some(controller) = weak.upgrade() {
+            controller.finish_seek(false);
         }
     });
     let mailbox = Arc::new(Mutex::new(None::<Snapshot>));

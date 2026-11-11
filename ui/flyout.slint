@@ -55,6 +55,8 @@ export component Flyout inherits Window {
     in property <bool> can-previous;
     in property <bool> can-next;
     in property <bool> has-timeline;
+    in property <bool> can-seek;
+    in-out property <bool> seeking: false;
     in property <float> progress;
     in property <string> elapsed;
     in property <string> duration;
@@ -67,6 +69,10 @@ export component Flyout inherits Window {
     callback dismiss;
     callback media-updated;
     callback select-session(int);
+    callback seek-started;
+    callback seek-preview(float);
+    callback seek-committed;
+    callback seek-cancelled;
 
     FocusScope {
         key-pressed(event) => {
@@ -144,13 +150,46 @@ export component Flyout inherits Window {
             overflow: elide;
         }
         if root.has-timeline && root.status == "": Rectangle {
-            x: 304px; y: 142px; width: 128px; height: 30px;
+            x: 304px; y: 142px; width: 128px; height: 36px;
             background: transparent;
             Text { x: 0px; y: 0px; width: parent.width / 2; height: 14px; text: root.elapsed; font-size: 10px; color: Palette.muted; horizontal-alignment: left; }
             Text { x: parent.width / 2; y: 0px; width: parent.width / 2; height: 14px; text: root.duration; font-size: 10px; color: Palette.muted; horizontal-alignment: right; }
             Rectangle {
-                x: 0px; y: 25px; height: 2px; width: parent.width; border-radius: 1px; background: Palette.border;
-                Rectangle { x: 0px; y: 0px; height: parent.height; width: parent.width * root.progress; border-radius: 1px; background: Palette.accent-text; }
+                x: 0px; y: 16px; height: 20px; width: parent.width;
+                background: transparent;
+                Rectangle {
+                    x: 0px; y: (parent.height - self.height) / 2;
+                    height: root.can-seek && (seek-touch.has-hover || root.seeking) ? 4px : 2px;
+                    width: parent.width; border-radius: 2px; background: Palette.border;
+                    Rectangle { x: 0px; y: 0px; height: parent.height; width: parent.width * root.progress; border-radius: 2px; background: Palette.accent-text; }
+                }
+                if root.can-seek && (seek-touch.has-hover || root.seeking): Rectangle {
+                    x: max(0px, min(parent.width - self.width, parent.width * root.progress - self.width / 2));
+                    y: (parent.height - self.height) / 2;
+                    width: 10px; height: 10px; border-radius: 5px;
+                    background: Palette.accent-text;
+                }
+                seek-touch := TouchArea {
+                    enabled: root.can-seek;
+                    mouse-cursor: pointer;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.cancel {
+                            if root.seeking { root.seek-cancelled(); }
+                        } else if event.button == PointerEventButton.left {
+                            if event.kind == PointerEventKind.down {
+                                root.seeking = true;
+                                root.seek-started();
+                                root.seek-preview(max(0, min(1, self.mouse-x / self.width)));
+                            } else if event.kind == PointerEventKind.up && root.seeking {
+                                root.seek-preview(max(0, min(1, self.mouse-x / self.width)));
+                                root.seek-committed();
+                            }
+                        }
+                    }
+                    moved => {
+                        if root.seeking { root.seek-preview(max(0, min(1, self.mouse-x / self.width))); }
+                    }
+                }
             }
         }
 

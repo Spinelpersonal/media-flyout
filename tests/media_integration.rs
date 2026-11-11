@@ -8,8 +8,8 @@ use std::{
 use windows::{
     Foundation::{TimeSpan, TypedEventHandler},
     Media::{
-        MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls as Controls,
-        SystemMediaTransportControlsButton as Button,
+        MediaPlaybackStatus, MediaPlaybackType, PlaybackPositionChangeRequestedEventArgs,
+        SystemMediaTransportControls as Controls, SystemMediaTransportControlsButton as Button,
         SystemMediaTransportControlsButtonPressedEventArgs,
         SystemMediaTransportControlsTimelineProperties,
     },
@@ -49,8 +49,10 @@ impl Drop for Apartment {
 struct Publisher {
     controls: Controls,
     token: i64,
+    seek_token: i64,
     hwnd: HWND,
     commands: Receiver<Button>,
+    seeks: Receiver<i64>,
 }
 
 impl Publisher {
@@ -99,13 +101,30 @@ impl Publisher {
             let _ = sender.send(button);
             Ok(())
         }))?;
+        let (sender, seeks) = mpsc::channel();
+        let native = controls.clone();
+        let seek_token = controls.PlaybackPositionChangeRequested(&TypedEventHandler::<
+            Controls,
+            PlaybackPositionChangeRequestedEventArgs,
+        >::new(
+            move |_, arguments| {
+                if let Some(arguments) = arguments.as_ref() {
+                    let position = arguments.RequestedPlaybackPosition()?.Duration;
+                    publish_timeline(&native, position, true)?;
+                    let _ = sender.send(position);
+                }
+                Ok(())
+            },
+        ))?;
         controls.SetIsEnabled(true)?;
         controls.SetPlaybackStatus(MediaPlaybackStatus::Playing)?;
         let publisher = Self {
             controls,
             token,
+            seek_token,
             hwnd,
             commands,
+            seeks,
         };
         publisher.track("Fixture track α")?;
         publisher.timeline()?;
@@ -123,25 +142,30 @@ impl Publisher {
     }
 
     fn timeline(&self) -> Result<()> {
-        let timeline = SystemMediaTransportControlsTimelineProperties::new()?;
-        timeline.SetStartTime(TimeSpan { Duration: 0 })?;
-        timeline.SetEndTime(TimeSpan {
-            Duration: 180 * 10_000_000,
-        })?;
-        timeline.SetPosition(TimeSpan {
-            Duration: 30 * 10_000_000,
-        })?;
-        timeline.SetMinSeekTime(TimeSpan { Duration: 0 })?;
-        timeline.SetMaxSeekTime(TimeSpan {
-            Duration: 180 * 10_000_000,
-        })?;
-        self.controls.UpdateTimelineProperties(&timeline)
+        publish_timeline(&self.controls, 30 * 10_000_000, true)
     }
+}
+
+fn publish_timeline(controls: &Controls, position: i64, seekable: bool) -> Result<()> {
+    let timeline = SystemMediaTransportControlsTimelineProperties::new()?;
+    timeline.SetStartTime(TimeSpan { Duration: 0 })?;
+    timeline.SetEndTime(TimeSpan {
+        Duration: 180 * 10_000_000,
+    })?;
+    timeline.SetPosition(TimeSpan { Duration: position })?;
+    timeline.SetMinSeekTime(TimeSpan { Duration: 0 })?;
+    timeline.SetMaxSeekTime(TimeSpan {
+        Duration: if seekable { 180 * 10_000_000 } else { 0 },
+    })?;
+    controls.UpdateTimelineProperties(&timeline)
 }
 
 impl Drop for Publisher {
     fn drop(&mut self) {
         let _ = self.controls.RemoveButtonPressed(self.token);
+        let _ = self
+            .controls
+            .RemovePlaybackPositionChangeRequested(self.seek_token);
         let _ = self.controls.SetIsEnabled(false);
         // SAFETY: This test owns the hidden window and destroys it exactly once.
         unsafe {
@@ -214,9 +238,40 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
             .expect("pause callback"),
         Button::Pause
     );
-    receive(&receiver, |s| {
+    let paused = receive(&receiver, |s| {
         s.selected == Some(id) && s.state == PlaybackState::Paused
     });
+    assert!(paused.controls.seek, "fixture supports seeking");
+    for (fraction, seconds) in [(0.75, 135), (0.25, 45), (0.0, 0), (1.0, 180)] {
+        service.seek(id, paused.track_revision, fraction);
+        assert_eq!(
+            publisher
+                .seeks
+                .recv_timeout(Duration::from_secs(5))
+                .expect("seek callback"),
+            seconds * 10_000_000
+        );
+        receive(&receiver, |s| {
+            s.selected == Some(id)
+                && s.state == PlaybackState::Paused
+                && s.timeline
+                    .as_ref()
+                    .is_some_and(|t| t.position == Duration::from_secs(seconds as u64))
+        });
+    }
+    publish_timeline(&publisher.controls, 30 * 10_000_000, false)?;
+    receive(&receiver, |s| s.selected == Some(id) && !s.controls.seek);
+    service.seek(id, paused.track_revision, 0.5);
+    receive(&receiver, |s| s.selected == Some(id) && s.status.is_some());
+    assert!(
+        publisher
+            .seeks
+            .recv_timeout(Duration::from_millis(250))
+            .is_err(),
+        "nonseekable timelines do not receive seeks"
+    );
+    publisher.timeline()?;
+    receive(&receiver, |s| s.selected == Some(id) && s.controls.seek);
     service.control(Action::PlayPause);
     assert_eq!(
         publisher
@@ -246,9 +301,27 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
     );
 
     publisher.track("Fixture changed β")?;
-    receive(&receiver, |s| {
+    let changed = receive(&receiver, |s| {
         s.selected == Some(id) && s.track.title == "Fixture changed β"
     });
+    service.seek(id, paused.track_revision, 0.5);
+    // A subsequent supported command is a barrier proving the stale seek was processed.
+    service.control(Action::Previous);
+    assert_eq!(
+        publisher
+            .commands
+            .recv_timeout(Duration::from_secs(5))
+            .expect("barrier command"),
+        Button::Previous
+    );
+    assert_ne!(changed.track_revision, paused.track_revision);
+    assert!(
+        publisher
+            .seeks
+            .recv_timeout(Duration::from_millis(250))
+            .is_err(),
+        "old-track seeks are discarded"
+    );
     publisher.controls.SetIsNextEnabled(false)?;
     receive(&receiver, |s| s.selected == Some(id) && !s.controls.next);
     service.control(Action::Next);
@@ -284,6 +357,29 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
     receive(&receiver, |s| {
         s.selected == Some(second_id) && s.track.title == "Second window session"
     });
+    service.seek(id, changed.track_revision, 0.5);
+    service.control(Action::Next);
+    assert_eq!(
+        secondary
+            .commands
+            .recv_timeout(Duration::from_secs(5))
+            .expect("second session command"),
+        Button::Next
+    );
+    assert!(
+        publisher
+            .seeks
+            .recv_timeout(Duration::from_millis(250))
+            .is_err(),
+        "old-session seeks are discarded"
+    );
+    assert!(
+        secondary
+            .seeks
+            .recv_timeout(Duration::from_millis(250))
+            .is_err(),
+        "old-session seeks never target the new session"
+    );
     service.select(Some(id));
     receive(&receiver, |s| {
         s.selected == Some(id) && s.track.title == "Fixture changed β"
