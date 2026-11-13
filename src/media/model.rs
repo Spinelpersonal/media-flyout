@@ -41,7 +41,10 @@ impl std::fmt::Debug for Artwork {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionInfo {
     pub id: u64,
+    /// Original Windows identity, used for reconciliation and preferences.
     pub app_id: String,
+    /// Resolved on the media worker, for display only.
+    pub display_name: String,
     pub state: PlaybackState,
 }
 
@@ -97,6 +100,7 @@ mod tests {
         SessionInfo {
             id,
             app_id: format!("player-{id}"),
+            display_name: format!("Player {id}"),
             state,
         }
     }
@@ -156,22 +160,51 @@ mod tests {
             SessionInfo {
                 id: 1,
                 app_id: "player".into(),
+                display_name: "Player".into(),
                 state: PlaybackState::Paused,
             },
             SessionInfo {
                 id: 2,
                 app_id: "other".into(),
+                display_name: "Other".into(),
                 state: PlaybackState::Playing,
             },
             SessionInfo {
                 id: 3,
                 app_id: "player".into(),
+                display_name: "Player".into(),
                 state: PlaybackState::Playing,
             },
         ];
         assert_eq!(
             select_session(&sessions, Some(2), Some("player"), None),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn preferences_use_original_ids_even_when_display_names_match() {
+        let sessions = [
+            SessionInfo {
+                id: 1,
+                app_id: "F0DC299D809B9700".into(),
+                display_name: "Zen Browser".into(),
+                state: PlaybackState::Playing,
+            },
+            SessionInfo {
+                id: 2,
+                app_id: "another-installation".into(),
+                display_name: "Zen Browser".into(),
+                state: PlaybackState::Playing,
+            },
+        ];
+        assert_eq!(
+            select_session(&sessions, Some(2), Some("f0dc299d809b9700"), None),
+            Some(0)
+        );
+        assert_eq!(
+            select_session(&sessions, Some(2), Some("Zen Browser"), None),
+            Some(1)
         );
     }
 }

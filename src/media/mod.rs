@@ -1,5 +1,6 @@
 mod artwork;
 mod model;
+mod source;
 mod timeline;
 mod worker;
 

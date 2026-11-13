@@ -225,6 +225,7 @@ struct WatchedSession {
     native: Session,
     id: u64,
     app_id: String,
+    display_name: String,
     metadata_token: Option<i64>,
     playback_token: Option<i64>,
     timeline_token: Option<i64>,
@@ -237,10 +238,12 @@ struct WatchedSession {
 impl WatchedSession {
     fn new(native: Session, id: u64, notifier: &Notifier) -> Result<Self> {
         let app_id = native.SourceAppUserModelId()?.to_string_lossy();
+        let display_name = super::source::display_name(&app_id);
         let mut session = Self {
             native,
             id,
             app_id,
+            display_name,
             metadata_token: None,
             playback_token: None,
             timeline_token: None,
@@ -590,6 +593,7 @@ fn snapshot(
         .map(|s| SessionInfo {
             id: s.id,
             app_id: s.app_id.clone(),
+            display_name: s.display_name.clone(),
             state: s.state(),
         })
         .collect();

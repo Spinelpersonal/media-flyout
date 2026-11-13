@@ -34,6 +34,14 @@ playing session, any playing session, the configured application, Windows' curre
 session, and finally the first available session. A valid manual selection takes
 precedence. Application preferences are separate from temporary session IDs.
 
+Display names are resolved on the media worker when sessions are discovered.
+Known players have readable aliases; other sources use the Windows AppsFolder
+display name before falling back to browser aliases or a readable executable ID.
+This resolves installation-specific browser hashes without assigning them to a
+particular website. Unresolved opaque IDs use a generic label. Snapshots carry
+both the cached display name and the original ID; reconciliation and saved
+preferences always use the original ID. Shell lookups never run during UI updates.
+
 Metadata and controls have bounded asynchronous waits. Thumbnail references cross
 apartments through `AgileReference`; they are resolved and decoded on a separate
 worker with a single replaceable pending job and a three-second deadline. Results

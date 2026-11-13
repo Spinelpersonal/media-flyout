@@ -219,6 +219,15 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
         s.selected == Some(id) && s.track.title == "Fixture track α"
     });
     assert_eq!(snapshot.track.artist, "Fixture artist");
+    let source = snapshot.sessions.iter().find(|s| s.id == id).unwrap();
+    assert!(
+        !source.display_name.is_empty(),
+        "source has a display label"
+    );
+    assert!(
+        source.app_id.contains("TestPublisher") || source.app_id.contains("media_integration"),
+        "display-name resolution preserves the original source identity"
+    );
     assert_eq!(snapshot.track.album, "Fixture album");
     assert!(
         snapshot.track.artwork.is_none(),

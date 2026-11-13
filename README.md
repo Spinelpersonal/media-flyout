@@ -115,6 +115,13 @@ Click the source application name above the title to open the session selector.
 The list supports scrolling and dragging. Choose a session or **Automatic**.
 Different windows from the same source have separate session entries.
 
+Source labels use readable player names and Windows' installed application names
+when available, including browsers that report an installation-specific ID.
+YouTube playing in Zen or Firefox is labeled with the browser's name; an installed
+web app can use its own registered name. If an opaque ID cannot be resolved, the
+label is **Media player**. `--diagnose` retains the original application ID for
+troubleshooting and preferences.
+
 Manual selection stays in effect until that session disappears or automatic mode
 is selected. Automatic mode prioritizes a playing preferred app, Windows' current
 playing session, then any playing session. A paused preference does not displace

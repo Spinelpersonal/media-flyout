@@ -354,11 +354,11 @@ impl Controller {
                 "Automatic · follow playing media",
             )];
             labels.extend(snapshot.sessions.iter().map(|s| {
-                let name = app_name(&s.app_id);
+                let name = s.display_name.clone();
                 let name = if snapshot
                     .sessions
                     .iter()
-                    .filter(|other| other.app_id == s.app_id)
+                    .filter(|other| other.display_name == s.display_name)
                     .count()
                     > 1
                 {
@@ -673,7 +673,7 @@ fn present(flyout: &Flyout, snapshot: &Snapshot) {
         .sessions
         .iter()
         .find(|s| Some(s.id) == snapshot.selected)
-        .map(|s| app_name(&s.app_id))
+        .map(|s| s.display_name.clone())
         .unwrap_or_else(|| "MEDIA FLYOUT".into());
     flyout.set_source(source.as_str().into());
     flyout.set_playing(snapshot.state == PlaybackState::Playing);
@@ -681,21 +681,4 @@ fn present(flyout: &Flyout, snapshot: &Snapshot) {
     flyout.set_can_previous(snapshot.controls.previous);
     flyout.set_can_next(snapshot.controls.next);
     flyout.set_status(snapshot.status.as_deref().unwrap_or_default().into());
-}
-
-fn app_name(app_id: &str) -> String {
-    let lower = app_id.to_ascii_lowercase();
-    for (needle, name) in [
-        ("spotify", "Spotify"),
-        ("foobar2000", "foobar2000"),
-        ("firefox", "Firefox"),
-        ("chrome", "Chrome"),
-        ("msedge", "Edge"),
-    ] {
-        if lower.contains(needle) {
-            return name.into();
-        }
-    }
-    let name = app_id.rsplit('!').next().unwrap_or(app_id);
-    name.strip_suffix(".exe").unwrap_or(name).to_owned()
 }
