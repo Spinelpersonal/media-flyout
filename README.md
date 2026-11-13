@@ -10,6 +10,11 @@ No account connection or Spotify Web API is required.
 > The root cause is unresolved; this has not been established as a Rust limitation.
 > Hidden-launch desktop tests pass, but they do not reproduce a full Windows sign-in.
 > There is no verified automatic fix yet.
+> 
+> **Known YouTube issue:** When watching a YouTube video in Zen browser
+> (This issue presumably persists in all gecko browsers), the progress bar, after using
+> it to move to a different part of the video, can sometimes disappear in the flyout until
+> it is closed and reopened with the shortcut.
 
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
@@ -22,6 +27,13 @@ The measured release used **22.94 MiB working set before first show** and
 **25.73 MiB while visible** on the development machine. Hidden sampled CPU use
 was about **0.01% of the machine**. See [measurement conditions and reproduction
 instructions](docs/performance.md); these results are not guarantees.
+
+## Tested applications
+ - **Spotify**: Source shows up correctly as Spotify, everything works like it's supposed to.
+ - **Tidal**: Source shows up correctly as Tidal, everything works like it's supposed to.
+ - **Foobar2000**: Source shows up correctly as Foobar2000, everything works like it's supposed to.
+ - **Youtube on Zen Browser (Gecko)**: Source shows up correctly as Zen, everything apart from progress bar works like it's supposed to. Currently looking into this issue.
+ - **Youtube on Google Chrome (Chromium)**: Source shows up correctly as Google Chrome, everything works like it's supposed to, progress bar control works too. 
 
 ## Requirements
 
