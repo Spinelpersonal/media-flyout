@@ -26,6 +26,159 @@ impl Drop for App {
     }
 }
 
+struct HiddenApp(windows::Win32::Foundation::HANDLE);
+
+impl HiddenApp {
+    fn start(config: &Path) -> Self {
+        use windows::{
+            Win32::System::Threading::{
+                CREATE_NO_WINDOW, CreateProcessW, PROCESS_INFORMATION, STARTF_USESHOWWINDOW,
+                STARTUPINFOW,
+            },
+            core::{PCWSTR, PWSTR},
+        };
+        let mut command: Vec<u16> = format!(
+            "\"{}\" --config \"{}\"",
+            env!("CARGO_BIN_EXE_media-flyout"),
+            config.display()
+        )
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            dwFlags: STARTF_USESHOWWINDOW,
+            wShowWindow: windows::Win32::UI::WindowsAndMessaging::SW_HIDE.0 as u16,
+            ..Default::default()
+        };
+        let mut process = PROCESS_INFORMATION::default();
+        // SAFETY: The writable, null-terminated command and initialized structures
+        // live through CreateProcess. We own both returned handles.
+        unsafe {
+            CreateProcessW(
+                PCWSTR::null(),
+                Some(PWSTR(command.as_mut_ptr())),
+                None,
+                None,
+                false,
+                CREATE_NO_WINDOW,
+                None,
+                PCWSTR::null(),
+                &startup,
+                &mut process,
+            )
+            .expect("start with hidden-window startup info");
+            windows::Win32::Foundation::CloseHandle(process.hThread).expect("close thread handle");
+        }
+        Self(process.hProcess)
+    }
+
+    fn exited(&self) -> bool {
+        // SAFETY: We own the process handle, and a zero timeout never blocks.
+        unsafe {
+            windows::Win32::System::Threading::WaitForSingleObject(self.0, 0)
+                == windows::Win32::Foundation::WAIT_OBJECT_0
+        }
+    }
+}
+
+impl Drop for HiddenApp {
+    fn drop(&mut self) {
+        // SAFETY: These are our own child process and handle. Ensure a failed test
+        // cannot leave a background instance holding the singleton/hotkey.
+        unsafe {
+            if !self.exited() {
+                let _ = windows::Win32::System::Threading::TerminateProcess(self.0, 1);
+                windows::Win32::System::Threading::WaitForSingleObject(self.0, 5000);
+            }
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[test]
+#[ignore = "Requires the interactive Windows desktop, shell, and no running flyout; sends a test shortcut"]
+fn shortcut_works_before_first_show() {
+    use media_flyout::hotkey::RegisteredHotkey;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+
+    assert!(
+        window().is_none(),
+        "Close the existing flyout before this test"
+    );
+    // Never release modifiers physically held by the person running this test.
+    for key in [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN] {
+        // SAFETY: Read-only query of the interactive desktop's key state.
+        let state = unsafe { GetAsyncKeyState(i32::from(key.0)) };
+        assert!(state >= 0, "Release modifier keys before running this test");
+    }
+    let shortcut = "Ctrl+Alt+Shift+F24".parse().expect("shortcut");
+    let available = RegisteredHotkey::register(HWND::default(), 99, shortcut)
+        .expect("test shortcut must be free");
+    drop(available);
+    let config = std::env::temp_dir().join(format!(
+        "media-flyout-first-shortcut-{}.toml",
+        std::process::id()
+    ));
+    for animations in [true, false] {
+        std::fs::write(&config, format!("shortcut = 'Ctrl+Alt+Shift+F24'\ndismiss_after_seconds = 0\ndismiss_on_outside_click = false\nanimations = {animations}\n")).expect("isolated settings");
+        let app = HiddenApp::start(&config);
+        wait_until(Duration::from_secs(10), || {
+            assert!(
+                !app.exited(),
+                "flyout exited before registering the shortcut"
+            );
+            window().is_some() && RegisteredHotkey::register(HWND::default(), 99, shortcut).is_err()
+        });
+        let hwnd = window().expect("window");
+        // SAFETY: Read-only query of the test application's window.
+        assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool(), "starts hidden");
+        // Wait past initialization without warming the window via show or reload.
+        thread::sleep(Duration::from_secs(1));
+        let keys = [VK_CONTROL, VK_MENU, VK_SHIFT, VIRTUAL_KEY(0x87)];
+        let inputs: Vec<INPUT> = keys
+            .iter()
+            .copied()
+            .map(|key| (key, false))
+            .chain(keys.iter().rev().copied().map(|key| (key, true)))
+            .map(|(key, up)| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: key,
+                        dwFlags: if up {
+                            KEYEVENTF_KEYUP
+                        } else {
+                            Default::default()
+                        },
+                        ..Default::default()
+                    },
+                },
+            })
+            .collect();
+        // SAFETY: All INPUTs are initialized keyboard events, using an isolated
+        // chord reserved by the test app, with balanced modifier/key releases.
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(sent as usize, inputs.len());
+        // SAFETY: Read-only visibility query; no tray interaction or reload.
+        wait_until(Duration::from_secs(5), || unsafe {
+            IsWindowVisible(hwnd).as_bool()
+        });
+        assert!(
+            command(&config)
+                .arg("--quit")
+                .status()
+                .expect("exit")
+                .success()
+        );
+        wait_until(Duration::from_secs(10), || app.exited());
+    }
+    std::fs::remove_file(config).expect("remove settings");
+}
+
 #[test]
 #[ignore = "Requires the interactive Windows desktop, shell, and no running flyout"]
 fn shortcut_conflict_and_reload_preserve_working_registration() {

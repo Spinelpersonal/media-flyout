@@ -4,6 +4,13 @@ A compact Windows 10/11 media flyout built with Rust, Slint's software renderer,
 and native Windows APIs. It runs quietly in the tray and opens with **Ctrl + Space**.
 No account connection or Spotify Web API is required.
 
+> **Known Windows startup issue:** After signing in to Windows, the configured
+> shortcut has been reported to remain unresponsive until **Show / hide flyout**
+> or **Reload settings** is selected in the tray. Use either action as a workaround.
+> The root cause is unresolved; this has not been established as a Rust limitation.
+> Hidden-launch desktop tests pass, but they do not reproduce a full Windows sign-in.
+> There is no verified automatic fix yet.
+
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
 - Automatic selection of playing media, manual session switching, and saved app preferences.
@@ -199,6 +206,14 @@ controls, switching between two sessions from the same application, wrapper
 reconciliation, and removal. It does not send commands to personal media players.
 The lifecycle suite verifies hidden startup, single-instance reuse, timeout,
 configuration reload and positioning, shortcut conflicts/replacement, and cleanup.
+It also sends an isolated **Ctrl + Alt + Shift + F24** shortcut before the first
+show or reload, with animations enabled and disabled and `STARTF_USESHOWWINDOW`
+set to `SW_HIDE`. Run this case against the release build to exercise the Windows
+GUI executable, and release modifier keys before running it:
+
+```powershell
+cargo test --locked --release --test lifecycle shortcut_works_before_first_show -- --ignored --test-threads=1
+```
 
 Live Spotify metadata/artwork and application-rendered dark/light previews were
 also checked. Physical shortcut presses, tray-menu clicks, Escape/outside-click
