@@ -338,7 +338,6 @@ impl Controller {
                 || snapshot.track_revision != revision
                 || !snapshot.controls.seek
                 || snapshot.timeline.is_none()
-                || snapshot.status.is_some()
                 || !self.config.borrow().settings.show_progress
         }) {
             self.finish_seek(false);

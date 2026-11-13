@@ -84,7 +84,10 @@ The progress bar previews pointer drags locally and sends one seek on release.
 Seeks use absolute 100 ns ticks, clamp to the provider's seek range, and recheck
 the player's capability on the media worker. Session IDs and metadata revisions
 prevent a drag from seeking a different session or track. Dismissal pauses while
-dragging and restarts on release.
+dragging and restarts on release. A status message appears below a valid timeline
+so a rejected control or settings warning cannot hide progress or prevent a retry.
+Empty provider timelines remain hidden; see the
+[Gecko/YouTube investigation](gecko-youtube-progress.md).
 
 ## Configuration and lifecycle
 

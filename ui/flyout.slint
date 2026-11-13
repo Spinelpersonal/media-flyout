@@ -145,11 +145,14 @@ export component Flyout inherits Window {
             close-touch := TouchArea { clicked => { root.dismiss(); } }
         }
         if root.status != "": Text {
-            x: 302px; y: 134px; width: 130px; height: 40px;
+            x: root.has-timeline ? 20px : 302px;
+            y: root.has-timeline ? 178px : 134px;
+            width: root.has-timeline ? 412px : 130px;
+            height: root.has-timeline ? 14px : 40px;
             text: root.status; color: #dcbb8a; font-size: 10px; wrap: word-wrap;
             overflow: elide;
         }
-        if root.has-timeline && root.status == "": Rectangle {
+        if root.has-timeline: Rectangle {
             x: 304px; y: 142px; width: 128px; height: 36px;
             background: transparent;
             Text { x: 0px; y: 0px; width: parent.width / 2; height: 14px; text: root.elapsed; font-size: 10px; color: Palette.muted; horizontal-alignment: left; }

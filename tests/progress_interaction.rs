@@ -89,4 +89,20 @@ fn progress_click_drag_edges_cancellation_and_disabled_player() {
     release(400.0, 168.0);
     assert_eq!(previews.borrow().len(), preview_count);
     assert_eq!(*commits.borrow(), 2, "unsupported players stay read-only");
+
+    // A rejected seek or a settings warning must not replace a valid timeline.
+    flyout.set_can_seek(true);
+    flyout.set_status("This player did not accept seeking".into());
+    press(368.0, 168.0);
+    assert!(
+        flyout.get_seeking(),
+        "status must leave progress interactive"
+    );
+    release(400.0, 168.0);
+    assert_eq!(
+        *commits.borrow(),
+        3,
+        "seeking can be retried after a rejection"
+    );
+    assert_eq!(previews.borrow().last(), Some(&0.75));
 }

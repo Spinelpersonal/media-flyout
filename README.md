@@ -11,10 +11,12 @@ No account connection or Spotify Web API is required.
 > Hidden-launch desktop tests pass, but they do not reproduce a full Windows sign-in.
 > There is no verified automatic fix yet.
 > 
-> **Known YouTube issue:** When watching a YouTube video in Zen browser
-> (This issue presumably persists in all gecko browsers), the progress bar, after using
-> it to move to a different part of the video, can sometimes disappear in the flyout until
-> it is closed and reopened with the shortcut.
+> **Known YouTube issue in Gecko browsers:** Live diagnostics captured Firefox and
+> Zen reporting zero duration, position, and seek range to Windows while a video
+> was playing, including after Zen's progress bar disappeared. These empty timelines
+> cannot provide a progress bar. A separate flyout bug that hid valid progress
+> whenever a status message appeared is fixed; missing browser data remains
+> unresolved. See [diagnostic findings](docs/gecko-youtube-progress.md).
 
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
