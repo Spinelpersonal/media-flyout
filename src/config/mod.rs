@@ -136,14 +136,23 @@ impl ConfigStore {
     /// Re-read before editing so unrelated manual edits and comments survive.
     /// Malformed files are never replaced with defaults.
     pub fn set(&mut self, key: &str, value: impl Into<toml_edit::Value>) -> io::Result<()> {
+        self.set_many([(key, value.into())])
+    }
+
+    pub fn set_many<'a>(
+        &mut self,
+        edits: impl IntoIterator<Item = (&'a str, toml_edit::Value)>,
+    ) -> io::Result<()> {
         let mut document = read_document(&self.path)?;
-        let decor = document
-            .get(key)
-            .and_then(Item::as_value)
-            .map(|value| value.decor().clone());
-        document[key] = toml_edit::value(value.into());
-        if let (Some(decor), Some(value)) = (decor, document[key].as_value_mut()) {
-            *value.decor_mut() = decor;
+        for (key, value) in edits {
+            let decor = document
+                .get(key)
+                .and_then(Item::as_value)
+                .map(|value| value.decor().clone());
+            document[key] = toml_edit::value(value);
+            if let (Some(decor), Some(value)) = (decor, document[key].as_value_mut()) {
+                *value.decor_mut() = decor;
+            }
         }
         atomic_write(&self.path, document.to_string().as_bytes())?;
         let (settings, warnings) = parse(&document);

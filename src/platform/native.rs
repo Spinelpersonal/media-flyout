@@ -183,6 +183,9 @@ impl Platform for Backend {
                 // Refresh Slint's cached monotonic clock after an arbitrarily long
                 // blocking wait, before callbacks create timers from this message.
                 slint::platform::update_timers_and_animations();
+                if super::settings_dialog::handle_message(&message) {
+                    continue;
+                }
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
             }

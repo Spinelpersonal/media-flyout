@@ -3,10 +3,7 @@ use windows::{
     Win32::{
         Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HWND},
         System::Registry::*,
-        UI::{
-            Shell::ShellExecuteW,
-            WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW, SW_SHOWNORMAL},
-        },
+        UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
     },
     core::{PCWSTR, w},
 };
@@ -123,27 +120,6 @@ pub fn system_light_theme() -> bool {
         )
     };
     result == ERROR_SUCCESS && value != 0
-}
-
-pub fn open_config(path: &Path) -> Result<(), String> {
-    let argument = format!("\"{}\"", path.display());
-    let argument = wide(OsStr::new(&argument));
-    // SAFETY: The null-terminated buffers live through this call. The editor
-    // executable is fixed; only the selected configuration path is an argument.
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            w!("notepad.exe"),
-            PCWSTR(argument.as_ptr()),
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
-    if result.0 as isize <= 32 {
-        return Err("Could not open settings in Notepad".into());
-    }
-    Ok(())
 }
 
 pub fn show_error(message: &str) {

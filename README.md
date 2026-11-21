@@ -80,8 +80,7 @@ release or installer is required to build locally.
 
 ## Settings
 
-The first launch creates `%APPDATA%\MediaFlyout\config.toml`. Choose **Open settings**
-in the tray, edit the file in Notepad, save, then choose **Reload settings**.
+Right-click the tray icon and choose **Open settings**. Choose **Save** to apply your changes immediately. Preferences are stored in `%APPDATA%\MediaFlyout\config.toml`.
 [config.example.toml](config.example.toml) documents every option.
 
 ```toml

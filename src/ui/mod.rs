@@ -270,8 +270,19 @@ impl Controller {
             MenuAction::Exit => self.native_event(NativeEvent::Exit),
             MenuAction::Reload => self.reload(),
             MenuAction::OpenConfig => {
-                if let Err(error) = platform::open_config(&self.config.borrow().path) {
-                    self.tray.notify(&error);
+                let weak = Rc::downgrade(self);
+                let settings = self.config.borrow().settings.clone();
+                if let Err(error) = platform::open_settings(&settings, move |changes| {
+                    let controller = weak.upgrade().ok_or("Flyout closed")?;
+                    controller
+                        .config
+                        .borrow_mut()
+                        .set_many(changes)
+                        .map_err(|e| e.to_string())?;
+                    controller.apply_settings();
+                    Ok(())
+                }) {
+                    self.tray.notify(&error.to_string());
                 }
             }
             MenuAction::Autostart | MenuAction::Remember => {
