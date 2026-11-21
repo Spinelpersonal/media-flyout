@@ -149,6 +149,65 @@ pub(super) fn load(reference: IRandomAccessStreamReference) -> Result<Option<Arc
     Ok(Some(Arc::new(Artwork {
         width,
         height,
+        dominant_color: dominant_color(&rgba),
         rgba,
     })))
+}
+
+// Count related shades together so highlights and shadows on a blue cover
+// contribute to the same hue. Neutrals vote in separate brightness bands.
+fn dominant_color(rgba: &[u8]) -> Option<[u8; 3]> {
+    #[derive(Clone, Copy, Default)]
+    struct Bucket {
+        weight: u64,
+        sum: [u64; 3],
+    }
+
+    let mut buckets = [Bucket::default(); 16];
+    for &[r, g, b, alpha] in rgba.as_chunks::<4>().0 {
+        if alpha == 0 {
+            continue;
+        }
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let chroma = max - min;
+        let bin = if chroma <= 12 || chroma < max / 9 {
+            12 + usize::from(max / 64)
+        } else {
+            let (base, difference) = if max == r {
+                (0.0, i16::from(g) - i16::from(b))
+            } else if max == g {
+                (2.0, i16::from(b) - i16::from(r))
+            } else {
+                (4.0, i16::from(r) - i16::from(g))
+            };
+            let hue = base + f32::from(difference) / f32::from(chroma);
+            ((hue * 2.0).round() as i32).rem_euclid(12) as usize
+        };
+        let bucket = &mut buckets[bin];
+        let weight = u64::from(alpha);
+        bucket.weight += weight;
+        for (sum, channel) in bucket.sum.iter_mut().zip([r, g, b]) {
+            *sum += weight * u64::from(channel);
+        }
+    }
+    let best = buckets.iter().max_by_key(|bin| bin.weight)?;
+    (best.weight != 0).then(|| best.sum.map(|sum| (sum / best.weight) as u8))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn related_shades_outvote_a_contrasting_detail() {
+        let pixels = [
+            [10, 40, 100, 255],
+            [20, 80, 200, 255],
+            [255, 0, 0, 255],
+            [0, 255, 0, 0],
+        ];
+        assert_eq!(dominant_color(pixels.as_flattened()), Some([15, 60, 150]));
+        assert_eq!(dominant_color(&[24, 24, 24, 255]), Some([24; 3]));
+        assert_eq!(dominant_color(&[255, 0, 0, 0]), None);
+    }
 }

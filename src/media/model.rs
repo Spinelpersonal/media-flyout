@@ -26,6 +26,7 @@ pub struct Artwork {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    pub dominant_color: Option<[u8; 3]>,
 }
 
 impl std::fmt::Debug for Artwork {

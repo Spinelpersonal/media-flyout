@@ -19,6 +19,7 @@ No account connection or Spotify Web API is required.
 > unresolved. See [diagnostic findings](docs/gecko-youtube-progress.md).
 
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
+- Playback controls pick up the dominant cover colour and use grey when artwork is unavailable.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
 - Automatic selection of playing media, manual session switching, and saved app preferences.
 - Dark, light, and system themes; rounded corners; short optional transitions.

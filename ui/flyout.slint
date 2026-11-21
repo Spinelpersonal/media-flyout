@@ -8,7 +8,9 @@ export global Palette {
     out property <color> text: light ? #202632 : #f4f3f7;
     out property <color> secondary: light ? #505b68 : #c1c0cb;
     out property <color> muted: light ? #677280 : #858593;
-    out property <color> accent-text: light ? #286451 : #91b9aa;
+    in-out property <color> accent: #abb2b7;
+    in-out property <color> on-accent: black;
+    in-out property <color> accent-text: #abb2b7;
 }
 
 component TransportButton inherits Rectangle {
@@ -20,7 +22,9 @@ component TransportButton inherits Rectangle {
     width: primary ? 44px : 36px;
     height: primary ? 44px : 36px;
     border-radius: 22px;
-    background: !enabled ? Palette.elevated : primary ? (touch.pressed ? #8bbdb0 : touch.has-hover ? #c7ecde : #ade0cd) : (touch.pressed ? Palette.pressed : touch.has-hover ? Palette.hover : transparent);
+    background: !enabled ? Palette.elevated : primary ? Palette.accent : (touch.pressed ? Palette.pressed : touch.has-hover ? Palette.hover : transparent);
+    border-width: enabled && primary ? (touch.pressed ? 3px : 1px) : 0px;
+    border-color: touch.has-hover || touch.pressed ? Palette.on-accent : Palette.accent-text;
     accessible-role: button;
     accessible-label: label;
     accessible-enabled: enabled;
@@ -29,7 +33,7 @@ component TransportButton inherits Rectangle {
         text: root.glyph;
         font-family: "Segoe MDL2 Assets";
         font-size: root.primary ? 18px : 17px;
-        color: !root.enabled ? Palette.muted : root.primary ? #142a24 : Palette.text;
+        color: !root.enabled ? Palette.muted : root.primary ? Palette.on-accent : Palette.accent-text;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -98,7 +102,7 @@ export component Flyout inherits Window {
                 text: "\u{e8d6}";
                 font-family: "Segoe MDL2 Assets";
                 font-size: 36px;
-                color: #8ba99f;
+                color: #a1a7ab;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }

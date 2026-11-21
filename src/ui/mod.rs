@@ -16,6 +16,8 @@ use crate::{
     tray::{MenuAction, TrayIcon},
 };
 
+mod accent;
+
 slint::include_modules!();
 
 #[derive(Default)]
@@ -193,6 +195,16 @@ impl Controller {
             Theme::System => platform::system_light_theme(),
         };
         self.flyout.global::<Palette>().set_light(light);
+        self.update_accent();
+    }
+
+    fn update_accent(&self) {
+        let color = self
+            .artwork
+            .borrow()
+            .as_ref()
+            .and_then(|art| art.dominant_color);
+        accent::apply(&self.flyout.global::<Palette>(), color);
     }
 
     fn update_tooltip(&self) {
@@ -422,6 +434,7 @@ impl Controller {
             self.flyout
                 .set_has_artwork(snapshot.track.artwork.is_some());
             *self.artwork.borrow_mut() = snapshot.track.artwork.clone();
+            self.update_accent();
         }
         *self.latest.borrow_mut() = snapshot;
         self.sync_progress();
