@@ -20,6 +20,7 @@ No account connection or Spotify Web API is required.
 
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
 - Playback controls pick up the dominant cover colour and use grey when artwork is unavailable.
+- Open **Lyrics** beside the source selector to follow the current track.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
 - Automatic selection of playing media, manual session switching, and saved app preferences.
 - Dark, light, and system themes; rounded corners; short optional transitions.
@@ -80,6 +81,14 @@ binary and corresponding-source archives as build artifacts; no published GitHub
 release or installer is required to build locally.
 
 ## Settings
+
+### Lyrics
+
+Open **Lyrics** while a player is reporting a title and artist. The flyout stays open while you read. Select **Lyrics** again to collapse it, or dismiss the flyout as usual.
+
+While the panel is open, Media Flyout looks up the current recording on [LRCLIB](https://lrclib.net) using its title and artist, with album and duration used for matching when available. Matching word-synced lyrics highlight the current word. Line-synced lyrics show the current and upcoming lines. Plain lyrics scroll, including when the player supplies no usable playback clock. Recent results stay in memory for ten minutes.
+
+### Preferences
 
 Right-click the tray icon and choose **Open settings**. Choose **Save** to apply your changes immediately. Preferences are stored in `%APPDATA%\MediaFlyout\config.toml`.
 [config.example.toml](config.example.toml) documents every option.

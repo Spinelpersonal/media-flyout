@@ -157,6 +157,7 @@ fn timestamp(s: &str) -> Option<u64> {
 
 fn parse_lrc(text: &str) -> Vec<Line> {
     let mut lines = Vec::new();
+    let mut expanded_bytes = 0usize;
     for row in text.lines() {
         let mut rest = row.trim();
         let mut times = Vec::new();
@@ -169,6 +170,10 @@ fn parse_lrc(text: &str) -> Vec<Line> {
         }
         // Multiple timestamps may repeat one refrain. Bound expansion of malformed input.
         for start_ms in times.into_iter().take(64) {
+            expanded_bytes += rest.len() + std::mem::size_of::<Line>();
+            if expanded_bytes > 2 * 1024 * 1024 {
+                return Vec::new();
+            }
             lines.push(Line {
                 text: rest.into(),
                 start_ms,
@@ -184,38 +189,42 @@ fn same(a: &str, b: &str) -> bool {
     a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
-fn best(key: &TrackKey, records: Vec<Record>) -> Option<Lyrics> {
-    records
-        .into_iter()
-        .filter_map(|r| {
-            if !same(&key.title, &r.track_name) || !same(&key.artist, &r.artist_name) {
-                return None;
-            }
-            let difference = key.duration.map_or(0., |d| (d as f64 - r.duration).abs());
-            if difference > 2.0 {
-                return None;
-            }
-            let album_match = !key.album.is_empty() && same(&key.album, &r.album_name);
-            if !album_match && !key.album.is_empty() && key.duration.is_none() {
-                return None;
-            }
-            let lyrics = Lyrics::decode(r)?;
-            Some((
-                (
-                    album_match,
-                    lyrics.quality(),
-                    std::cmp::Reverse((difference * 1000.) as u64),
-                ),
-                lyrics,
-            ))
-        })
-        .max_by_key(|(score, _)| *score)
-        .map(|(_, lyrics)| lyrics)
+type Rank = (bool, u8, std::cmp::Reverse<u64>);
+
+fn ranked(key: &TrackKey, record: Record) -> Option<(Rank, Lyrics)> {
+    if !same(&key.title, &record.track_name) || !same(&key.artist, &record.artist_name) {
+        return None;
+    }
+    let difference = key
+        .duration
+        .map_or(0., |d| (d as f64 - record.duration).abs());
+    if difference > 2.0 {
+        return None;
+    }
+    let album_matches = key.album.is_empty() || same(&key.album, &record.album_name);
+    if !album_matches && key.duration.is_none() {
+        return None;
+    }
+    let lyrics = Lyrics::decode(record)?;
+    let rank = (
+        album_matches,
+        lyrics.quality(),
+        std::cmp::Reverse((difference * 1000.) as u64),
+    );
+    Some((rank, lyrics))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn best(key: &TrackKey, records: Vec<Record>) -> Option<Lyrics> {
+        records
+            .into_iter()
+            .filter_map(|r| ranked(key, r))
+            .max_by_key(|(rank, _)| *rank)
+            .map(|(_, lyrics)| lyrics)
+    }
 
     const WORDS: &str = "version: '1.0'\nlines:\n  - text: 'One two'\n    start_ms: 200\n    end_ms: 1000\n    words: [{text: 'One ', start_ms: 200, end_ms: 500}, {text: two, start_ms: 600}]\n";
 

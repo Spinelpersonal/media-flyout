@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod accent;
+mod lyrics;
 
 slint::include_modules!();
 
@@ -35,6 +36,8 @@ struct Controller {
     hotkey: RefCell<Option<RegisteredHotkey>>,
     dismiss_timer: slint::Timer,
     progress_timer: slint::Timer,
+    lyrics: RefCell<lyrics::Panel>,
+    lyric_timer: slint::Timer,
     latest: RefCell<Snapshot>,
     seek_target: Cell<Option<(u64, u64)>>,
     seek_fraction: Cell<f64>,
@@ -58,6 +61,7 @@ impl Controller {
     }
 
     fn hide(&self) {
+        self.close_lyrics();
         self.dismiss_timer.stop();
         self.progress_timer.stop();
         self.flyout.set_session_menu(false);
@@ -75,7 +79,7 @@ impl Controller {
     }
 
     fn arm_dismiss(self: &Rc<Self>) {
-        if self.flyout.get_seeking() {
+        if self.flyout.get_seeking() || self.flyout.get_lyrics_open() {
             self.dismiss_timer.stop();
             return;
         }
@@ -437,6 +441,7 @@ impl Controller {
             self.update_accent();
         }
         *self.latest.borrow_mut() = snapshot;
+        self.sync_lyrics();
         self.sync_progress();
     }
 
@@ -511,6 +516,8 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         hotkey: RefCell::new(None),
         dismiss_timer: slint::Timer::default(),
         progress_timer: slint::Timer::default(),
+        lyrics: RefCell::default(),
+        lyric_timer: slint::Timer::default(),
         latest: RefCell::new(Snapshot::default()),
         seek_target: Cell::new(None),
         seek_fraction: Cell::new(0.0),
@@ -519,6 +526,7 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         config: RefCell::new(config),
     });
     controller.apply_settings();
+    lyrics::connect(&controller);
     let weak = Rc::downgrade(&controller);
     controller.native.set_event_handler(move |event| {
         if let Some(controller) = weak.upgrade() {

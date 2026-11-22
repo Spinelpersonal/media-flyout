@@ -1,4 +1,4 @@
-use super::{Lyrics, Record, TrackKey, best};
+use super::{Lyrics, Record, TrackKey, ranked};
 use serde::de::DeserializeOwned;
 use std::{
     hash::{BuildHasher, RandomState},
@@ -113,15 +113,23 @@ impl Client {
                 .query_pairs_mut()
                 .append_pair("duration", &duration.to_string());
         }
-        // Stable v1 search includes every representation, so rank actual usable
-        // timings rather than trusting summary flags or fetching every candidate.
-        let matches: Vec<Record> = self.request(search)?.unwrap_or_default();
-        if let Some(lyrics) = best(key, matches) {
-            return Ok(Some(lyrics));
+        let exact_match = self.request::<Record>(exact)?.and_then(|r| ranked(key, r));
+        if matches!(&exact_match, Some(((true, 3, _), _))) {
+            return Ok(exact_match.map(|(_, lyrics)| lyrics));
         }
-        Ok(self
-            .request::<Record>(exact)?
-            .and_then(|r| best(key, vec![r])))
+        // Search may contain a better timed edition of the same recording.
+        // A failed secondary search still leaves the signature result usable.
+        let matches = match self.request::<Vec<Record>>(search) {
+            Ok(found) => found.unwrap_or_default(),
+            Err(_) if exact_match.is_some() => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(matches
+            .into_iter()
+            .filter_map(|r| ranked(key, r))
+            .chain(exact_match)
+            .max_by_key(|(rank, _)| *rank)
+            .map(|(_, lyrics)| lyrics))
     }
 }
 

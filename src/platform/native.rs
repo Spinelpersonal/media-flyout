@@ -813,14 +813,12 @@ unsafe extern "system" fn window_proc(
                 }
             }
             WM_DPICHANGED => {
+                let size = window.size.get().to_logical(window.window.scale_factor());
                 let scale = (wparam.0 as u16) as f32 / 96.0;
                 window.dispatch(WindowEvent::ScaleFactorChanged {
                     scale_factor: scale,
                 });
-                window.resize(PhysicalSize::new(
-                    (452.0 * scale) as u32,
-                    (196.0 * scale) as u32,
-                ));
+                window.resize(size.to_physical(scale));
                 let _ = PostMessageW(Some(hwnd), REPOSITION_MESSAGE, WPARAM(0), LPARAM(0));
             }
             WM_TIMER if wparam.0 == TIMER => {

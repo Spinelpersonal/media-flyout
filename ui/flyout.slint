@@ -43,7 +43,7 @@ component TransportButton inherits Rectangle {
 export component Flyout inherits Window {
     title: "Media Flyout";
     width: 452px;
-    height: 196px;
+    height: lyrics-open ? 340px : 196px;
     no-frame: true;
     background: Palette.surface;
     default-font-family: "Segoe UI";
@@ -52,6 +52,16 @@ export component Flyout inherits Window {
     in property <string> album;
     in property <string> source: "MEDIA FLYOUT";
     in property <string> status;
+    in property <bool> lyrics-open;
+    in property <bool> lyrics-available;
+    in property <bool> lyrics-timed;
+    in property <string> lyrics-body;
+    in property <string> lyric-before;
+    in property <string> lyric-word;
+    in property <string> lyric-after;
+    in property <string> lyric-next;
+    callback toggle-lyrics;
+    callback lyrics-ready;
     in property <image> artwork;
     in property <bool> has-artwork;
     in property <bool> playing;
@@ -109,7 +119,7 @@ export component Flyout inherits Window {
         }
 
         Text {
-            x: 146px; y: 20px; width: 224px; height: 15px;
+            x: 146px; y: 20px; width: root.lyrics-available || root.lyrics-open ? 166px : 224px; height: 15px;
             text: root.source; color: Palette.accent-text; font-size: 10px; font-weight: 600;
             overflow: elide; wrap: no-wrap;
         }
@@ -201,10 +211,46 @@ export component Flyout inherits Window {
         }
 
         Rectangle {
-            x: 140px; y: 12px; width: 254px; height: 28px;
+            x: 140px; y: 12px; width: root.lyrics-available || root.lyrics-open ? 190px : 254px; height: 28px;
             background: transparent;
             Text { x: parent.width - 14px; width: 12px; text: "\u{e70d}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.muted; vertical-alignment: center; }
             TouchArea { clicked => { root.session-menu = !root.session-menu; } }
+        }
+        if root.lyrics-available || root.lyrics-open: Rectangle {
+            x: 345px; y: 13px; width: 52px; height: 24px;
+            border-radius: 5px;
+            background: lyrics-touch.has-hover || root.lyrics-open ? Palette.elevated : transparent;
+            accessible-role: button;
+            accessible-label: root.lyrics-open ? "Hide lyrics" : "Show lyrics";
+            accessible-action-default => { root.toggle-lyrics(); }
+            Text { text: "Lyrics"; color: Palette.secondary; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+            lyrics-touch := TouchArea { clicked => { root.toggle-lyrics(); } }
+        }
+        if root.lyrics-open: Rectangle {
+            x: 20px; y: 195px; width: parent.width - 40px; height: parent.height - self.y - 14px;
+            background: transparent;
+            clip: true;
+            Rectangle { height: 1px; background: Palette.border; }
+            if root.lyrics-timed: VerticalLayout {
+                y: 10px; height: parent.height - 16px; width: parent.width;
+                spacing: 6px; alignment: center;
+                StyledText {
+                    text: @markdown("\{root.lyric-before}**\{root.lyric-word}**\{root.lyric-after}");
+                    default-color: Palette.text; default-font-size: 18px;
+                    max-lines: 3;
+                }
+                Text { text: root.lyric-next; color: Palette.secondary; font-size: 13px; wrap: word-wrap; max-lines: 2; overflow: elide; }
+            }
+            if !root.lyrics-timed: Flickable {
+                y: 10px; height: parent.height - 12px; width: parent.width;
+                content-width: self.width; content-height: max(self.height, copy.preferred-height);
+                property <string> body: root.lyrics-body;
+                changed body => { self.content-y = 0px; }
+                copy := Text {
+                    width: parent.width; height: self.preferred-height;
+                    text: root.lyrics-body; color: Palette.secondary; font-size: 14px; wrap: word-wrap;
+                }
+            }
         }
         if root.session-menu: Rectangle {
             x: 12px; y: 40px; width: parent.width - 24px; height: 144px;
