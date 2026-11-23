@@ -63,6 +63,18 @@ fn opens_from_the_flyout_highlights_individual_words_and_scrolls_plain_lyrics() 
         first != panel(),
         "moving word emphasis must change the rendered line"
     );
+    flyout.set_lyric_after(
+        " carries on for long enough to wrap onto another row in the lyrics panel".into(),
+    );
+    let wrapped = flyout.window().take_snapshot().unwrap();
+    let (rows, _) = wrapped.as_slice().as_chunks::<452>();
+    for row in &rows[195..326] {
+        let background = row[16];
+        assert!(
+            row[20..432].contains(&background),
+            "a solid divider crosses the lyrics panel"
+        );
+    }
     flyout.set_lyrics_timed(false);
     flyout.set_lyrics_body(
         (0..40)
