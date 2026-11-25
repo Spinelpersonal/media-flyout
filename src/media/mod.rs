@@ -1,4 +1,5 @@
 mod artwork;
+pub(crate) mod mixer;
 mod model;
 mod source;
 mod timeline;

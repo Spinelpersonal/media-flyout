@@ -91,6 +91,17 @@ export component Flyout inherits Window {
     in property <bool> can-next;
     in property <bool> has-timeline;
     in property <bool> can-seek;
+    in property <bool> volume-available;
+    in property <int> app-volume;
+    in property <bool> app-muted;
+    in-out property <bool> adjusting-volume;
+    private property <int> volume-preview;
+    private property <int> displayed-volume: adjusting-volume ? volume-preview : app-volume;
+    callback volume-updated;
+    callback set-volume(int);
+    callback step-volume(int);
+    callback toggle-mute;
+    callback volume-interaction;
     in-out property <bool> seeking: false;
     in property <float> progress;
     in property <string> elapsed;
@@ -164,9 +175,87 @@ export component Flyout inherits Window {
             overflow: elide; wrap: no-wrap;
         }
         Text {
-            x: 146px; y: 100px; width: 286px; height: 18px;
+            x: 146px; y: 95px; width: 286px; height: 15px;
             text: root.album; color: Palette.muted; font-size: 11px;
             overflow: elide; wrap: no-wrap;
+        }
+        Text {
+            x: 146px; y: 110px; width: 66px; height: 22px;
+            text: "App volume"; font-size: 11px; color: Palette.secondary; vertical-alignment: center;
+        }
+        ActionButton {
+            x: 212px; y: 110px; width: 24px; height: 22px; border-radius: 4px;
+            enabled: root.volume-available && !root.session-menu;
+            keyboard: root.keyboard-mode;
+            label: root.app-muted ? "Unmute application" : "Mute application";
+            background: self.hovered && self.enabled ? Palette.hover : transparent;
+            Text {
+                text: root.app-muted ? "\u{e74f}" : "\u{e767}";
+                font-family: "Segoe MDL2 Assets"; font-size: 14px;
+                color: root.volume-available ? Palette.accent-text : Palette.muted;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+            clicked => { root.toggle-mute(); }
+        }
+        Rectangle {
+            x: 240px; y: 110px; width: 146px; height: 22px; border-radius: 4px;
+            background: transparent;
+            border-color: Palette.text;
+            border-width: volume-keys.enabled && volume-keys.has-focus ? 2px : 0px;
+            accessible-role: slider;
+            accessible-label: "Application volume";
+            accessible-enabled: root.volume-available;
+            accessible-value: root.volume-available ? "\{root.displayed-volume}%" : "Unavailable";
+            accessible-action-increment => { if root.volume-available { root.step-volume(5); } }
+            accessible-action-decrement => { if root.volume-available { root.step-volume(-5); } }
+            volume-keys := FocusScope {
+                enabled: root.keyboard-mode && root.volume-available && !root.session-menu;
+                key-pressed(event) => {
+                    if self.enabled && (event.text == Key.LeftArrow || event.text == Key.RightArrow) {
+                        root.step-volume(event.text == Key.LeftArrow ? -5 : 5);
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+            Rectangle {
+                x: 5px; y: 10px; width: parent.width - 10px; height: 3px; border-radius: 2px;
+                background: Palette.border;
+                if root.volume-available: Rectangle {
+                    x: 0px; y: 0px; height: parent.height; width: parent.width * root.displayed-volume / 100;
+                    background: root.app-muted ? Palette.muted : Palette.accent-text; border-radius: 2px;
+                }
+                if root.volume-available: Rectangle {
+                    x: parent.width * root.displayed-volume / 100 - 4px; y: -3px;
+                    height: 9px; width: 9px; border-radius: 5px; background: Palette.accent-text;
+                }
+            }
+            TouchArea {
+                enabled: root.volume-available && !root.session-menu;
+                mouse-cursor: pointer;
+                function preview() {
+                    root.volume-preview = round(100 * max(0, min(1, (self.mouse-x - 5px) / (self.width - 10px))));
+                }
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.cancel {
+                        root.adjusting-volume = false;
+                        root.volume-interaction();
+                    } else if event.button == PointerEventButton.left {
+                        if event.kind == PointerEventKind.down {
+                            preview(); root.adjusting-volume = true; root.volume-interaction();
+                        } else if event.kind == PointerEventKind.up && root.adjusting-volume {
+                            preview(); root.adjusting-volume = false; root.set-volume(root.volume-preview);
+                        }
+                    }
+                }
+                moved => { if root.adjusting-volume { preview(); } }
+            }
+        }
+        Text {
+            x: 391px; y: 110px; width: 41px; height: 22px;
+            text: root.volume-available ? "\{root.displayed-volume}%" : "—";
+            font-size: 11px; color: Palette.muted; vertical-alignment: center;
+            horizontal-alignment: right;
         }
         HorizontalLayout {
             x: 146px; y: 131px; width: 142px; height: 44px;

@@ -18,6 +18,7 @@ use crate::{
 
 mod accent;
 mod lyrics;
+mod mixer;
 
 slint::include_modules!();
 
@@ -36,6 +37,8 @@ struct Controller {
     hotkey: RefCell<Option<RegisteredHotkey>>,
     dismiss_timer: slint::Timer,
     progress_timer: slint::Timer,
+    mixer: RefCell<Option<media::mixer::Mixer>>,
+    volume_instance: RefCell<Option<String>>,
     visualizer: RefCell<Option<media::visualizer::Visualizer>>,
     lyrics: RefCell<lyrics::Panel>,
     lyric_timer: slint::Timer,
@@ -59,10 +62,12 @@ impl Controller {
         }
         self.arm_dismiss();
         self.sync_progress();
+        self.sync_mixer();
         self.sync_visualizer();
     }
 
     fn hide(&self) {
+        self.stop_mixer();
         self.stop_visualizer();
         self.native.restore_focus();
         self.flyout.set_keyboard_mode(false);
@@ -105,7 +110,10 @@ impl Controller {
     }
 
     fn arm_dismiss(self: &Rc<Self>) {
-        if self.flyout.get_seeking() || self.flyout.get_lyrics_open() {
+        if self.flyout.get_seeking()
+            || self.flyout.get_adjusting_volume()
+            || self.flyout.get_lyrics_open()
+        {
             self.dismiss_timer.stop();
             return;
         }
@@ -199,6 +207,10 @@ impl Controller {
             }
             NativeEvent::Interaction => self.arm_dismiss(),
             NativeEvent::CancelInteraction => {
+                if self.flyout.get_adjusting_volume() {
+                    self.flyout.set_adjusting_volume(false);
+                    self.arm_dismiss();
+                }
                 if self.flyout.get_seeking() {
                     self.finish_seek(false);
                 }
@@ -370,6 +382,7 @@ impl Controller {
     }
 
     fn select(self: &Rc<Self>, index: i32) {
+        self.stop_mixer();
         let selected = usize::try_from(index)
             .ok()
             .and_then(|i| i.checked_sub(1))
@@ -480,6 +493,7 @@ impl Controller {
             self.update_accent();
         }
         *self.latest.borrow_mut() = snapshot;
+        self.sync_mixer();
         self.sync_lyrics();
         self.sync_progress();
     }
@@ -555,6 +569,8 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         hotkey: RefCell::new(None),
         dismiss_timer: slint::Timer::default(),
         progress_timer: slint::Timer::default(),
+        mixer: RefCell::default(),
+        volume_instance: RefCell::default(),
         visualizer: RefCell::default(),
         lyrics: RefCell::default(),
         lyric_timer: slint::Timer::default(),
@@ -567,6 +583,7 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     });
     controller.apply_settings();
     lyrics::connect(&controller);
+    mixer::connect(&controller);
     let weak = Rc::downgrade(&controller);
     controller.flyout.on_spectrum_updated(move || {
         if let Some(controller) = weak.upgrade()

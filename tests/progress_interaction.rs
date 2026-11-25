@@ -18,6 +18,63 @@ impl Platform for Headless {
 }
 
 #[test]
+fn application_volume_supports_pointer_and_keyboard_and_skips_unmatched_apps() {
+    use slint::platform::Key;
+    use std::cell::Cell;
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+    let flyout = Flyout::new().unwrap();
+    flyout.window().set_size(PhysicalSize::new(452, 196));
+    flyout.set_keyboard_mode(true);
+    flyout.show().unwrap();
+    let value = Rc::new(Cell::new(-1));
+    let result = value.clone();
+    flyout.on_set_volume(move |percent| result.set(percent));
+    let result = value.clone();
+    flyout.on_step_volume(move |delta| result.set(result.get() + delta));
+    let muted = Rc::new(Cell::new(false));
+    let result = muted.clone();
+    flyout.on_toggle_mute(move || result.set(!result.get()));
+    let pointer = |pressed, x| {
+        let position = LogicalPosition::new(x, 121.0);
+        let button = PointerEventButton::Left;
+        window.dispatch_event(if pressed {
+            WindowEvent::PointerPressed { position, button }
+        } else {
+            WindowEvent::PointerReleased { position, button }
+        });
+    };
+    pointer(true, 245.0);
+    pointer(false, 245.0);
+    pointer(true, 224.0);
+    pointer(false, 224.0);
+    assert!(!muted.get() && value.get() == -1);
+    flyout.set_volume_available(true);
+    pointer(true, 245.0);
+    assert!(flyout.get_adjusting_volume());
+    pointer(false, 313.0);
+    assert_eq!(value.get(), 50);
+    assert!(!flyout.get_adjusting_volume());
+    flyout.invoke_focus_source();
+    let key = |k: Key| {
+        window.dispatch_event(WindowEvent::KeyPressed { text: k.into() });
+        window.dispatch_event(WindowEvent::KeyReleased { text: k.into() });
+    };
+    key(Key::Tab);
+    key(Key::Return);
+    assert!(muted.get());
+    key(Key::Tab);
+    key(Key::LeftArrow);
+    assert_eq!(value.get(), 45);
+    key(Key::RightArrow);
+    assert_eq!(value.get(), 50);
+    pointer(true, 245.0);
+    flyout.set_adjusting_volume(false); // Controller invalidates a drag on target change.
+    pointer(false, 381.0);
+    assert_eq!(value.get(), 50);
+}
+
+#[test]
 fn keyboard_traverses_available_controls_and_activates_the_highlighted_row() {
     use slint::{SharedString, VecModel, platform::Key};
     use std::cell::Cell;

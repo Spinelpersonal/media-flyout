@@ -23,6 +23,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_Com",
     "Win32_Media_Audio", "Win32_Media_KernelStreaming", "Win32_Media_Multimedia",
     "Win32_System_Com_StructuredStorage", "Win32_System_Variant",
+    "Win32_Storage_Packaging_Appx", "Win32_Storage_EnhancedStorage", "Win32_System_Diagnostics_ToolHelp",
 ] }
 windows-future = "0.3.2"
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-18", "renderer-software"] }
@@ -30,6 +31,9 @@ toml_edit = "0.25.19"
 
 [build-dependencies]
 slint-build = { version = "=1.18.1", default-features = false, features = ["compat-1-18"] }
+
+[dev-dependencies]
+windows = { version = "0.62.2", features = ["Win32_Media_Audio_Endpoints"] }
 
 [profile.release]
 opt-level = 3

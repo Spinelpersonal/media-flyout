@@ -99,6 +99,8 @@ mod tests {
         );
         flyout.show().unwrap();
         let palette = flyout.global::<Palette>();
+        flyout.set_volume_available(true);
+        flyout.set_app_volume(64);
         for light in [false, true] {
             palette.set_light(light);
             for cover in [Some([15, 60, 150]), Some([220, 45, 30]), None] {
@@ -110,6 +112,9 @@ mod tests {
                 };
                 assert_eq!(rgb(216, 137), cover.unwrap_or([153, 160, 165]));
                 let bar = palette.get_accent_text();
+                assert_eq!(rgb(248, 121), [bar.red(), bar.green(), bar.blue()]);
+                let empty = palette.get_border();
+                assert_eq!(rgb(350, 121), [empty.red(), empty.green(), empty.blue()]);
                 assert_eq!(rgb(320, 167), [bar.red(), bar.green(), bar.blue()]);
                 for i in 0..crate::media::visualizer::BARS {
                     assert_eq!(rgb(26 + i * 4, 173), [bar.red(), bar.green(), bar.blue()]);

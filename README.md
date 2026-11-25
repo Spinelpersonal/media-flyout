@@ -75,6 +75,18 @@ button. In the session menu, use **Up/Down** to highlight a row and **Enter** or
 **Space** to select it. **Escape** closes the menu first. On the progress bar,
 **Left/Right** seeks five seconds within the player's supported range.
 
+**App volume** controls the selected application's Windows mixer session. Click
+the speaker to mute or unmute while keeping its volume level. Click the slider
+or drag and release to set the level. With the slider focused, **Left/Right**
+adjusts it by five percentage points. Moving the application's slider in Windows
+Volume Mixer also updates the flyout. Browser volume can affect several tabs.
+
+The controls appear dimmed when the player has no identifiable audio session or
+has multiple active matches, including matches on different output devices.
+When playback is inactive, the mixer requires a single matching session.
+The flyout checks again while open so the controls can recover after a restart
+or an audio-device change.
+
 Dismissal returns focus to the previous application if the flyout still owns it.
 Opening with a tray click or `--show` keeps the current application focused.
 
@@ -254,6 +266,17 @@ the lifecycle suite, and run its tests serially:
 ```powershell
 cargo test --locked --test media_integration -- --ignored --test-threads=1
 cargo test --locked --test lifecycle -- --ignored --test-threads=1
+```
+
+The Core Audio test uses the default render endpoint to create silent, private
+sessions for the test executable. It checks external volume and mute changes,
+keyboard adjustments, stale writes, ambiguous matches, and session replacement.
+It uses a second output when available and verifies the default output's master
+level. Physical device removal and restarting a player during a drag can be
+checked separately on the desktop.
+
+```powershell
+cargo test --locked --lib media::mixer::tests::live_application_mixer -- --ignored --exact
 ```
 
 The media suite publishes silent test sessions and verifies real GSMTC discovery,

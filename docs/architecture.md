@@ -56,6 +56,22 @@ notification. Unchanged artwork is not converted to a new Slint image on playbac
 or timeline updates. Controls are checked again immediately before dispatch, since
 a player can change its supported capabilities after the UI update.
 
+## Application volume
+
+While the flyout has a visible selection, a Core Audio worker enumerates sessions
+across active render endpoints once per second. It checks the single-process
+owner's Windows application ID or exact executable path. For unpackaged apps it
+can resolve the GSMTC ID through an installed shortcut without launch arguments.
+A publisher that supplies only an executable filename must resolve to one path
+among running processes with that name. Display names never participate.
+
+One active session must match. If all matches are inactive, only a single match
+is accepted. System sounds and expired sessions are excluded. The worker reads volume
+and mute from its `ISimpleAudioVolume` every 250 ms and publishes changes.
+Before writing, it repeats discovery and checks the session instance ID that
+the UI showed. A new selection or dismissal cancels pending input and releases
+the worker. This path opens no audio stream. [Windows session volume API](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nn-audioclient-isimpleaudiovolume)
+
 ## Audio spectrum
 
 When the spectrum is enabled, showing the flyout starts shared-mode WASAPI
