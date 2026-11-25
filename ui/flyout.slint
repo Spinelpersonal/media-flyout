@@ -109,12 +109,15 @@ export component Flyout inherits Window {
     in property <[string]> session-labels;
     in property <int> selected-session: 0;
     in-out property <bool> session-menu: false;
+    in property <bool> pinned;
+    callback toggle-pin;
     in property <bool> keyboard-mode;
     private property <int> menu-row;
     private property <int> active-row: max(0, min(menu-row, session-labels.length - 1));
     public function focus-source() { source-keys.focus(); }
+    public function outside-click() { if !pinned { dismiss(); } }
     public function escape() {
-        if session-menu {
+        if session-menu && !pinned {
             session-menu = false;
             if keyboard-mode { focus-source(); }
         } else { dismiss(); }
@@ -276,6 +279,22 @@ export component Flyout inherits Window {
             background: Palette.accent-text;
         }
         ActionButton {
+            x: parent.width - 58px; y: 12px; width: 24px; height: 22px;
+            keyboard: root.keyboard-mode;
+            label: root.pinned ? "Unpin flyout" : "Pin flyout";
+            accessible-checkable: true;
+            accessible-checked: root.pinned;
+            border-radius: 5px;
+            background: root.pinned ? Palette.accent : self.pressed ? Palette.pressed : self.hovered ? Palette.hover : transparent;
+            Text {
+                text: root.pinned ? "\u{e77a}" : "\u{e718}";
+                font-family: "Segoe MDL2 Assets"; font-size: 13px;
+                color: root.pinned ? Palette.on-accent : Palette.secondary;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+            clicked => { root.toggle-pin(); }
+        }
+        ActionButton {
             x: parent.width - 32px; y: 12px; width: 20px; height: 20px;
             keyboard: root.keyboard-mode;
             label: "Close";
@@ -384,7 +403,7 @@ export component Flyout inherits Window {
             TouchArea { clicked => { root.toggle-menu(); } }
         }
         if root.lyrics-available || root.lyrics-open: ActionButton {
-            x: 345px; y: 13px; width: 52px; height: 24px;
+            x: 338px; y: 13px; width: 52px; height: 24px;
             border-radius: 5px;
             keyboard: root.keyboard-mode;
             background: self.hovered || root.lyrics-open ? Palette.elevated : transparent;

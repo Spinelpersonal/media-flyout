@@ -136,6 +136,29 @@ fn keyboard_traverses_available_controls_and_activates_the_highlighted_row() {
     assert!(!flyout.get_session_menu() && !dismissed.get());
     flyout.invoke_escape();
     assert!(dismissed.get());
+
+    // In reverse order from the source: seek, close, pin.
+    let pin_requested = Rc::new(Cell::new(false));
+    let result = pin_requested.clone();
+    flyout.on_toggle_pin(move || result.set(true));
+    for _ in 0..3 {
+        press(Key::Backtab.into());
+    }
+    press(Key::Return.into());
+    assert!(pin_requested.get());
+    dismissed.set(false);
+    flyout.invoke_outside_click();
+    assert!(dismissed.get(), "outside clicks dismiss an unpinned flyout");
+    flyout.set_pinned(true);
+    dismissed.set(false);
+    flyout.invoke_outside_click();
+    assert!(!dismissed.get(), "a pinned flyout ignores outside clicks");
+    flyout.set_session_menu(true);
+    flyout.invoke_escape();
+    assert!(
+        dismissed.get(),
+        "one Escape dismisses a pinned flyout even in the session menu"
+    );
 }
 
 #[test]

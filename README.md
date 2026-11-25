@@ -74,10 +74,15 @@ after ten seconds, on Escape, on the close button, or on an observed outside cli
 Using a media control restarts the timeout. Dismissal leaves the background process
 running.
 
+Click the **pin** beside the close button to keep the flyout on top while you
+use other apps. The highlighted pin pauses the timeout and outside-click
+dismissal. Click it again to resume your usual settings, or press **Escape**
+or your flyout shortcut to dismiss it. The next time it opens, it starts unpinned.
+
 Opening with the shortcut focuses the source selector. **Tab** and **Shift+Tab**
 move the focus ring between available controls. **Enter** or **Space** activates a
 button. In the session menu, use **Up/Down** to highlight a row and **Enter** or
-**Space** to select it. **Escape** closes the menu first. On the progress bar,
+**Space** to select it. In an unpinned flyout, **Escape** closes the menu first. On the progress bar,
 **Left/Right** seeks five seconds within the player's supported range.
 
 **App volume** controls the selected application's Windows mixer session. Click

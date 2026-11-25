@@ -377,6 +377,77 @@ fn startup_leaves_welcome_pending_for_the_first_manual_launch() {
 
 #[test]
 #[ignore = "Requires the interactive Windows desktop, shell, and no running flyout"]
+fn pin_survives_timeout_and_clears_on_dismissal() {
+    use windows::Win32::{
+        Foundation::{LPARAM, WPARAM},
+        UI::{
+            Input::KeyboardAndMouse::VK_ESCAPE,
+            WindowsAndMessaging::{
+                GetClientRect, SendMessageW, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WS_EX_TOPMOST,
+            },
+        },
+    };
+    assert!(
+        window().is_none(),
+        "Close the existing flyout before this test"
+    );
+    let config = std::env::temp_dir().join(format!("media-flyout-pin-{}.toml", std::process::id()));
+    std::fs::write(
+        &config,
+        "shortcut = 'Ctrl+Alt+Shift+F24'\ndismiss_after_seconds = 1\nanimations = false\n",
+    )
+    .unwrap();
+    let mut app = App(command(&config).arg("--startup").spawn().unwrap());
+    let timeout = Duration::from_secs(5);
+    wait_until(timeout, || window().is_some());
+    let hwnd = window().unwrap();
+    // SAFETY: These queries and input messages target only the test flyout.
+    let visible = || unsafe { IsWindowVisible(hwnd).as_bool() };
+    // SAFETY: Both pointer messages are synchronous and target the test window's pin button.
+    let click_pin = || unsafe {
+        let mut client = RECT::default();
+        GetClientRect(hwnd, &mut client).unwrap();
+        let x = 406 * client.right / 452;
+        let y = 23 * client.bottom / 196;
+        let point = LPARAM(((y << 16) | x) as isize);
+        SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
+        SendMessageW(hwnd, WM_LBUTTONUP, None, Some(point));
+    };
+    let show = || {
+        assert!(command(&config).arg("--show").status().unwrap().success());
+        wait_until(timeout, visible);
+    };
+    let show_pinned = || {
+        show();
+        click_pin();
+        thread::sleep(Duration::from_millis(1400));
+        assert!(visible(), "pin suspends automatic dismissal");
+        // SAFETY: Inspect the topmost style of this test window.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        assert_ne!(style & WS_EX_TOPMOST.0, 0);
+    };
+    for (message, key) in [(WM_KEYDOWN, usize::from(VK_ESCAPE.0)), (WM_HOTKEY, 1)] {
+        show_pinned();
+        // SAFETY: Deliver the Escape or shortcut message directly to the test window.
+        unsafe {
+            SendMessageW(hwnd, message, Some(WPARAM(key)), None);
+        }
+        assert!(!visible(), "explicit dismissal takes effect immediately");
+    }
+    show_pinned();
+    click_pin();
+    assert!(visible(), "unpinning leaves the flyout open");
+    wait_until(timeout, || !visible());
+    show();
+    wait_until(timeout, || !visible());
+    assert!(command(&config).arg("--quit").status().unwrap().success());
+    wait_until(timeout, || app.0.try_wait().unwrap().is_some());
+    std::fs::remove_file(config).unwrap();
+}
+
+#[test]
+#[ignore = "Requires the interactive Windows desktop, shell, and no running flyout"]
 fn background_visibility_single_instance_and_clean_exit() {
     assert!(
         window().is_none(),

@@ -54,7 +54,7 @@ pub enum NativeEvent {
     Shortcut,
     Escape,
     Show,
-    Dismiss,
+    OutsideClick,
     Exit,
     TrayMenu,
     TrayCreated,
@@ -470,7 +470,7 @@ impl NativeWindow {
                         || point.y < rect.top
                         || point.y >= rect.bottom)
                 {
-                    self.emit(NativeEvent::Dismiss);
+                    self.emit(NativeEvent::OutsideClick);
                 }
             } else {
                 self.mouse_was_down.set(down);

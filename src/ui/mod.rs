@@ -99,6 +99,7 @@ impl Controller {
     }
 
     fn hide(&self) {
+        self.flyout.set_pinned(false);
         self.stop_mixer();
         self.stop_visualizer();
         self.native.restore_focus();
@@ -142,7 +143,8 @@ impl Controller {
     }
 
     fn arm_dismiss(self: &Rc<Self>) {
-        if self.flyout.get_seeking()
+        if self.flyout.get_pinned()
+            || self.flyout.get_seeking()
             || self.flyout.get_adjusting_volume()
             || self.flyout.get_lyrics_open()
         {
@@ -236,7 +238,7 @@ impl Controller {
             }
             NativeEvent::Toggle => self.toggle(),
             NativeEvent::Show => self.show(),
-            NativeEvent::Dismiss => self.hide(),
+            NativeEvent::OutsideClick => self.flyout.invoke_outside_click(),
             NativeEvent::Exit => {
                 self.hide();
                 self.native.finish_transition();
@@ -671,6 +673,15 @@ fn run_with_launch(
     controller.native.set_event_handler(move |event| {
         if let Some(controller) = weak.upgrade() {
             controller.native_event(event);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_toggle_pin(move || {
+        if let Some(controller) = weak.upgrade() {
+            controller
+                .flyout
+                .set_pinned(!controller.flyout.get_pinned());
+            controller.arm_dismiss();
         }
     });
     let weak = Rc::downgrade(&controller);

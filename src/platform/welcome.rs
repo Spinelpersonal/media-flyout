@@ -72,8 +72,8 @@ fn create_dialog(
 ) -> windows::core::Result<HWND> {
     let mut t = Template::new("Welcome to Media Flyout", 292);
     let toggle = match shortcut {
-        Some(keys) => format!("Press {keys} or click the tray icon to show or hide the flyout."),
-        None => "Click the tray icon to show or hide the flyout. You can choose a new keyboard shortcut in settings.".into(),
+        Some(keys) => format!("Press {keys} or click the tray icon to show or hide the flyout. Pin it to keep it on top."),
+        None => "Click the tray icon to open the flyout. Pin it to keep it on top. You can choose a shortcut in settings.".into(),
     };
     t.item(
         0xffff, LABEL,
