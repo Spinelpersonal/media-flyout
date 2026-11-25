@@ -70,12 +70,15 @@ are not painted. Short native alpha fades run only during transitions and honor
 both configuration and Windows' client-area animation preference.
 
 The tool window is topmost while visible, stays out of the taskbar, and uses
-`WS_EX_NOACTIVATE` / `SW_SHOWNOACTIVATE`. Media buttons work without taking focus
-from the foreground app. Work-area coordinates exclude taskbars, and margins and
+`WS_EX_NOACTIVATE` / `SW_SHOWNOACTIVATE` for pointer entry. The global shortcut
+explicitly activates the flyout and focuses its session selector. The native
+adapter forwards navigation keys to Slint focus scopes. Dismissal restores the
+saved foreground window if the flyout still owns activation and the target exists.
+Work-area coordinates exclude taskbars, and margins and
 dimensions scale with per-monitor DPI. DPI and display-change notifications
 reposition the window; resume reconnects the media manager.
 
-Escape and outside clicks use a 50 ms input check **only while visible**. This
+Unfocused Escape and outside clicks use a 50 ms input check **only while visible**. This
 keeps input hooks out of the process and preserves foreground focus. Very short
 input can be missed. Progress uses a separate one-second display timer only when
 visible and advancing. It extrapolates the last reported position using playback

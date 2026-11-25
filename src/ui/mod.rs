@@ -61,6 +61,8 @@ impl Controller {
     }
 
     fn hide(&self) {
+        self.native.restore_focus();
+        self.flyout.set_keyboard_mode(false);
         self.close_lyrics();
         self.dismiss_timer.stop();
         self.progress_timer.stop();
@@ -151,6 +153,18 @@ impl Controller {
 
     fn native_event(self: &Rc<Self>, event: NativeEvent) {
         match event {
+            NativeEvent::Shortcut if !self.flyout.window().is_visible() => {
+                self.show();
+                if self.flyout.window().is_visible() && self.native.focus_for_shortcut() {
+                    self.flyout.set_keyboard_mode(true);
+                    self.flyout.invoke_focus_source();
+                }
+            }
+            NativeEvent::Shortcut => self.hide(),
+            NativeEvent::Escape => {
+                self.arm_dismiss();
+                self.flyout.invoke_escape();
+            }
             NativeEvent::Toggle => self.toggle(),
             NativeEvent::Show => self.show(),
             NativeEvent::Dismiss => self.hide(),
@@ -586,6 +600,27 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     controller.flyout.on_seek_committed(move || {
         if let Some(controller) = weak.upgrade() {
             controller.finish_seek(true);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_step_seek(move |seconds| {
+        if let Some(controller) = weak.upgrade()
+            && controller.flyout.get_can_seek()
+            && !controller.flyout.get_seeking()
+        {
+            let snapshot = controller.latest.borrow();
+            if let (Some(id), Some(timeline), Some(service)) = (
+                snapshot.selected,
+                &snapshot.timeline,
+                &*controller.service.borrow(),
+            ) {
+                let target = timeline.current_position().as_secs_f64() + f64::from(seconds);
+                service.seek(
+                    id,
+                    snapshot.track_revision,
+                    target / timeline.duration.as_secs_f64(),
+                );
+            }
         }
     });
     let weak = Rc::downgrade(&controller);

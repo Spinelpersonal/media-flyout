@@ -50,6 +50,8 @@ struct Fade {
 #[derive(Clone, Copy)]
 pub enum NativeEvent {
     Toggle,
+    Shortcut,
+    Escape,
     Show,
     Dismiss,
     Exit,
@@ -243,6 +245,8 @@ pub struct NativeWindow {
     shared: Arc<Shared>,
     event_handler: RefCell<Option<EventHandler>>,
     mouse_was_down: Cell<bool>,
+    escape_was_down: Cell<bool>,
+    previous_foreground: Cell<HWND>,
     pointer_down: Cell<bool>,
     taskbar_created: Cell<u32>,
     placement: Cell<(crate::config::Position, crate::config::Monitor, u16)>,
@@ -268,6 +272,8 @@ impl NativeWindow {
             shared,
             event_handler: RefCell::new(None),
             mouse_was_down: Cell::new(false),
+            escape_was_down: Cell::new(false),
+            previous_foreground: Cell::default(),
             pointer_down: Cell::new(false),
             taskbar_created: Cell::new(0),
             placement: Cell::new((
@@ -333,6 +339,30 @@ impl NativeWindow {
 
     pub fn handle(&self) -> HWND {
         self.hwnd.get()
+    }
+
+    pub fn focus_for_shortcut(&self) -> bool {
+        let hwnd = self.handle();
+        // SAFETY: Only the shortcut path explicitly activates our UI-thread window.
+        unsafe {
+            let previous = GetForegroundWindow();
+            if !SetForegroundWindow(hwnd).as_bool() {
+                return false;
+            }
+            let _ = SetFocus(Some(hwnd));
+            self.previous_foreground.set(previous);
+            GetFocus() == hwnd
+        }
+    }
+
+    pub fn restore_focus(&self) {
+        let previous = self.previous_foreground.take();
+        // SAFETY: Only return activation if the user hasn't already switched away.
+        unsafe {
+            if GetForegroundWindow() == self.handle() && IsWindow(Some(previous)).as_bool() {
+                let _ = SetForegroundWindow(previous);
+            }
+        }
     }
 
     pub fn set_event_handler(&self, handler: impl Fn(NativeEvent) + 'static) {
@@ -419,10 +449,12 @@ impl NativeWindow {
         // SAFETY: These read-only input queries require no pointers other than our
         // initialized POINT/RECT. They run only while the flyout is visible.
         unsafe {
-            if GetAsyncKeyState(i32::from(VK_ESCAPE.0)) < 0 {
-                self.emit(NativeEvent::Dismiss);
+            let escape = GetAsyncKeyState(i32::from(VK_ESCAPE.0)) < 0;
+            if escape && !self.escape_was_down.replace(escape) && GetFocus() != self.handle() {
+                self.emit(NativeEvent::Escape);
                 return;
             }
+            self.escape_was_down.set(escape);
             let down = GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
                 || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0;
             if down && !self.mouse_was_down.replace(down) && self.outside_click.get() {
@@ -615,6 +647,8 @@ impl WindowAdapter for NativeWindow {
         // SAFETY: The HWND is valid and the window is deliberately shown without focus.
         unsafe {
             if visible {
+                self.escape_was_down
+                    .set(GetAsyncKeyState(i32::from(VK_ESCAPE.0)) < 0);
                 self.mouse_was_down.set(
                     GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
                         || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0,
@@ -747,6 +781,41 @@ unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
             WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
+            WM_SETFOCUS | WM_KILLFOCUS => {
+                window.dispatch(WindowEvent::WindowActiveChanged(message == WM_SETFOCUS));
+            }
+            WM_KEYDOWN | WM_KEYUP if window.visible.get() => {
+                use slint::platform::Key;
+                let key = VIRTUAL_KEY(wparam.0 as u16);
+                let repeat = message == WM_KEYDOWN && (lparam.0 & (1 << 30)) != 0;
+                if key == VK_ESCAPE {
+                    window.escape_was_down.set(message == WM_KEYDOWN);
+                    if message == WM_KEYDOWN && !repeat {
+                        window.emit(NativeEvent::Escape);
+                    }
+                    return LRESULT(0);
+                }
+                let text = match key {
+                    VK_TAB if GetKeyState(i32::from(VK_SHIFT.0)) < 0 => Key::Backtab.into(),
+                    VK_TAB => Key::Tab.into(),
+                    VK_RETURN => Key::Return.into(),
+                    VK_SPACE => " ".into(),
+                    VK_LEFT => Key::LeftArrow.into(),
+                    VK_RIGHT => Key::RightArrow.into(),
+                    VK_UP => Key::UpArrow.into(),
+                    VK_DOWN => Key::DownArrow.into(),
+                    _ => return DefWindowProcW(hwnd, message, wparam, lparam),
+                };
+                if repeat && matches!(key, VK_RETURN | VK_SPACE) {
+                    return LRESULT(0);
+                }
+                if message == WM_KEYDOWN {
+                    window.emit(NativeEvent::Interaction);
+                    window.dispatch(WindowEvent::KeyPressed { text });
+                } else {
+                    window.dispatch(WindowEvent::KeyReleased { text });
+                }
+            }
             WM_MOUSEMOVE => {
                 if !window.tracking_mouse.replace(true) {
                     let mut tracking = TRACKMOUSEEVENT {
@@ -831,7 +900,7 @@ unsafe extern "system" fn window_proc(
                 window.advance_fade();
             }
             WM_HOTKEY if wparam.0 == 1 || wparam.0 == 2 => {
-                window.emit(NativeEvent::Toggle);
+                window.emit(NativeEvent::Shortcut);
             }
             super::instance::SHOW_MESSAGE => {
                 window.emit(NativeEvent::Show);

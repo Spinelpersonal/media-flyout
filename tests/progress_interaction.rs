@@ -18,6 +18,70 @@ impl Platform for Headless {
 }
 
 #[test]
+fn keyboard_traverses_available_controls_and_activates_the_highlighted_row() {
+    use slint::{SharedString, VecModel, platform::Key};
+    use std::cell::Cell;
+
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+    let flyout = Flyout::new().unwrap();
+    flyout.window().set_size(PhysicalSize::new(452, 196));
+    flyout.set_keyboard_mode(true);
+    flyout.set_can_toggle(true);
+    flyout.set_has_timeline(true);
+    flyout.set_can_seek(true);
+    flyout
+        .set_session_labels(Rc::new(VecModel::from(vec![SharedString::from("Player"); 8])).into());
+    flyout.show().unwrap();
+    flyout.invoke_focus_source();
+    let press = |text: SharedString| {
+        window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    let selected = Rc::new(Cell::new(-1));
+    let result = selected.clone();
+    flyout.on_select_session(move |index| result.set(index));
+    press(Key::Return.into());
+    assert!(flyout.get_session_menu());
+    for _ in 0..7 {
+        press(Key::DownArrow.into());
+    }
+    press(Key::UpArrow.into());
+    press(" ".into());
+    assert_eq!(selected.get(), 6);
+    assert!(!flyout.get_session_menu());
+
+    let toggled = Rc::new(Cell::new(false));
+    let result = toggled.clone();
+    flyout.on_toggle_playback(move || result.set(true));
+    press(Key::Tab.into());
+    press(Key::Return.into());
+    assert!(
+        toggled.get(),
+        "skip unavailable lyrics and previous controls"
+    );
+    press(Key::Backtab.into());
+    press(Key::Backtab.into());
+    let step = Rc::new(Cell::new(0));
+    let result = step.clone();
+    flyout.on_step_seek(move |seconds| result.set(seconds));
+    press(Key::LeftArrow.into());
+    assert_eq!(step.get(), -5);
+    press(Key::RightArrow.into());
+    assert_eq!(step.get(), 5);
+
+    let dismissed = Rc::new(Cell::new(false));
+    let result = dismissed.clone();
+    flyout.on_dismiss(move || result.set(true));
+    flyout.invoke_focus_source();
+    press(" ".into());
+    flyout.invoke_escape();
+    assert!(!flyout.get_session_menu() && !dismissed.get());
+    flyout.invoke_escape();
+    assert!(dismissed.get());
+}
+
+#[test]
 fn progress_click_drag_edges_cancellation_and_disabled_player() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Headless(window.clone()))).expect("headless platform");

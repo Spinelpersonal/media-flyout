@@ -13,22 +13,42 @@ export global Palette {
     in-out property <color> accent-text: #abb2b7;
 }
 
-component TransportButton inherits Rectangle {
-    in property <string> glyph;
+component ActionButton inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
-    in property <bool> primary: false;
+    in property <bool> keyboard;
+    out property <bool> hovered: touch.has-hover;
+    out property <bool> pressed: touch.pressed;
+    out property <bool> focused: keyboard && enabled && keys.has-focus;
     callback clicked;
-    width: primary ? 44px : 36px;
-    height: primary ? 44px : 36px;
-    border-radius: 22px;
-    background: !enabled ? Palette.elevated : primary ? Palette.accent : (touch.pressed ? Palette.pressed : touch.has-hover ? Palette.hover : transparent);
-    border-width: enabled && primary ? (touch.pressed ? 3px : 1px) : 0px;
-    border-color: touch.has-hover || touch.pressed ? Palette.on-accent : Palette.accent-text;
     accessible-role: button;
     accessible-label: label;
     accessible-enabled: enabled;
     accessible-action-default => { if enabled { root.clicked(); } }
+    keys := FocusScope {
+        enabled: root.enabled && root.keyboard;
+        key-pressed(event) => {
+            if self.enabled && (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
+    border-width: focused ? 2px : 0px;
+    border-color: Palette.text;
+}
+
+component TransportButton inherits ActionButton {
+    in property <string> glyph;
+    in property <bool> primary: false;
+    width: primary ? 44px : 36px;
+    height: primary ? 44px : 36px;
+    border-radius: 22px;
+    background: !self.enabled ? Palette.elevated : primary ? Palette.accent : (self.pressed ? Palette.pressed : self.hovered ? Palette.hover : transparent);
+    border-width: self.focused ? 3px : self.enabled && primary ? (self.pressed ? 3px : 1px) : 0px;
+    border-color: self.focused ? (primary ? Palette.on-accent : Palette.text) : self.hovered || self.pressed ? Palette.on-accent : Palette.accent-text;
     Text {
         text: root.glyph;
         font-family: "Segoe MDL2 Assets";
@@ -37,7 +57,6 @@ component TransportButton inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
 }
 
 export component Flyout inherits Window {
@@ -77,6 +96,21 @@ export component Flyout inherits Window {
     in property <[string]> session-labels;
     in property <int> selected-session: 0;
     in-out property <bool> session-menu: false;
+    in property <bool> keyboard-mode;
+    private property <int> menu-row;
+    private property <int> active-row: max(0, min(menu-row, session-labels.length - 1));
+    public function focus-source() { source-keys.focus(); }
+    public function escape() {
+        if session-menu {
+            session-menu = false;
+            if keyboard-mode { focus-source(); }
+        } else { dismiss(); }
+    }
+    function toggle-menu() {
+        menu-row = selected-session;
+        session-menu = !session-menu;
+        if keyboard-mode { focus-source(); }
+    }
     callback toggle-playback;
     callback previous;
     callback next;
@@ -87,13 +121,7 @@ export component Flyout inherits Window {
     callback seek-preview(float);
     callback seek-committed;
     callback seek-cancelled;
-
-    FocusScope {
-        key-pressed(event) => {
-            if event.text == Key.Escape { root.dismiss(); return accept; }
-            return reject;
-        }
-    }
+    callback step-seek(int);
 
     Rectangle {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
@@ -142,21 +170,23 @@ export component Flyout inherits Window {
             x: 146px; y: 131px; width: 142px; height: 44px;
             spacing: 10px;
             alignment: center;
-            TransportButton { glyph: "\u{e892}"; label: "Previous track"; enabled: root.can-previous; clicked => { root.previous(); } }
-            TransportButton { glyph: root.playing ? "\u{e769}" : "\u{e768}"; label: root.playing ? "Pause" : "Play"; primary: true; enabled: root.can-toggle; clicked => { root.toggle-playback(); } }
-            TransportButton { glyph: "\u{e893}"; label: "Next track"; enabled: root.can-next; clicked => { root.next(); } }
+            TransportButton { keyboard: root.keyboard-mode; glyph: "\u{e892}"; label: "Previous track"; enabled: root.can-previous; clicked => { root.previous(); } }
+            TransportButton { keyboard: root.keyboard-mode; glyph: root.playing ? "\u{e769}" : "\u{e768}"; label: root.playing ? "Pause" : "Play"; primary: true; enabled: root.can-toggle; clicked => { root.toggle-playback(); } }
+            TransportButton { keyboard: root.keyboard-mode; glyph: "\u{e893}"; label: "Next track"; enabled: root.can-next; clicked => { root.next(); } }
         }
         Text {
             x: 20px; y: 143px; width: 106px; height: 16px;
             text: root.playing ? "PLAYING" : root.can-toggle ? "PAUSED" : "READY";
             color: Palette.muted; font-size: 9px; horizontal-alignment: center;
         }
-        Rectangle {
+        ActionButton {
             x: parent.width - 32px; y: 12px; width: 20px; height: 20px;
+            keyboard: root.keyboard-mode;
+            label: "Close";
             border-radius: 5px;
-            background: close-touch.has-hover ? Palette.hover : transparent;
+            background: self.hovered ? Palette.hover : transparent;
             Text { text: "\u{e711}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.muted; horizontal-alignment: center; vertical-alignment: center; }
-            close-touch := TouchArea { clicked => { root.dismiss(); } }
+            clicked => { root.dismiss(); }
         }
         if root.status != "": Text {
             x: root.has-timeline ? 20px : 302px;
@@ -174,6 +204,19 @@ export component Flyout inherits Window {
             Rectangle {
                 x: 0px; y: 16px; height: 20px; width: parent.width;
                 background: transparent;
+                border-radius: 4px;
+                border-color: Palette.text;
+                border-width: seek-keys.enabled && seek-keys.has-focus ? 2px : 0px;
+                seek-keys := FocusScope {
+                    enabled: root.keyboard-mode && root.can-seek;
+                    key-pressed(event) => {
+                        if self.enabled && (event.text == Key.LeftArrow || event.text == Key.RightArrow) {
+                            root.step-seek(event.text == Key.LeftArrow ? -5 : 5);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
                 Rectangle {
                     x: 0px; y: (parent.height - self.height) / 2;
                     height: root.can-seek && (seek-touch.has-hover || root.seeking) ? 4px : 2px;
@@ -213,18 +256,45 @@ export component Flyout inherits Window {
         Rectangle {
             x: 140px; y: 12px; width: root.lyrics-available || root.lyrics-open ? 190px : 254px; height: 28px;
             background: transparent;
+            border-radius: 5px;
+            border-width: root.keyboard-mode && source-keys.has-focus && !root.session-menu ? 2px : 0px;
+            border-color: Palette.text;
+            accessible-role: button;
+            accessible-label: "Select media session";
+            accessible-action-default => { root.toggle-menu(); }
+            source-keys := FocusScope {
+                enabled: root.keyboard-mode;
+                key-pressed(event) => {
+                    if event.text == Key.Return || event.text == " " {
+                        if root.session-menu {
+                            root.session-menu = false;
+                            root.select-session(root.active-row);
+                        } else { root.toggle-menu(); }
+                        return accept;
+                    }
+                    if event.text == Key.UpArrow || event.text == Key.DownArrow
+                        || (root.session-menu && (event.text == Key.Tab || event.text == Key.Backtab)) {
+                        if !root.session-menu { root.toggle-menu(); }
+                        else {
+                            root.menu-row = max(0, min(root.session-labels.length - 1,
+                                root.active-row + (event.text == Key.UpArrow || event.text == Key.Backtab ? -1 : 1)));
+                        }
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
             Text { x: parent.width - 14px; width: 12px; text: "\u{e70d}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.muted; vertical-alignment: center; }
-            TouchArea { clicked => { root.session-menu = !root.session-menu; } }
+            TouchArea { clicked => { root.toggle-menu(); } }
         }
-        if root.lyrics-available || root.lyrics-open: Rectangle {
+        if root.lyrics-available || root.lyrics-open: ActionButton {
             x: 345px; y: 13px; width: 52px; height: 24px;
             border-radius: 5px;
-            background: lyrics-touch.has-hover || root.lyrics-open ? Palette.elevated : transparent;
-            accessible-role: button;
-            accessible-label: root.lyrics-open ? "Hide lyrics" : "Show lyrics";
-            accessible-action-default => { root.toggle-lyrics(); }
+            keyboard: root.keyboard-mode;
+            background: self.hovered || root.lyrics-open ? Palette.elevated : transparent;
+            label: root.lyrics-open ? "Hide lyrics" : "Show lyrics";
+            clicked => { root.toggle-lyrics(); }
             Text { text: "Lyrics"; color: Palette.secondary; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-            lyrics-touch := TouchArea { clicked => { root.toggle-lyrics(); } }
         }
         if root.lyrics-open: Rectangle {
             x: 20px; y: 195px; width: parent.width - 40px; height: parent.height - self.y - 14px;
@@ -260,9 +330,19 @@ export component Flyout inherits Window {
                 x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px;
                 content-height: root.session-labels.length * 34px;
                 content-width: self.width;
+                property <length> row-top: root.active-row * 34px;
+                function reveal-row() {
+                    if root.keyboard-mode {
+                        self.content-y = min(0px, max(-row-top, min(self.content-y, self.height - row-top - 34px)));
+                    }
+                }
+                init => { reveal-row(); }
+                changed row-top => { reveal-row(); }
                 for label[index] in root.session-labels: Rectangle {
                     x: 0px; y: index * 34px; width: parent.width; height: 34px;
                     border-radius: 6px;
+                    border-width: root.keyboard-mode && index == root.active-row ? 2px : 0px;
+                    border-color: Palette.text;
                     background: row-touch.has-hover ? Palette.hover : index == root.selected-session ? Palette.pressed : transparent;
                     Text { x: 12px; width: parent.width - 24px; text: label; font-size: 12px; color: Palette.text; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
                     row-touch := TouchArea { clicked => { root.session-menu = false; root.select-session(index); } }

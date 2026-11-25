@@ -67,7 +67,16 @@ The executable starts hidden, without a console or permanent main window.
 Press **Ctrl + Space** to show it and press again to dismiss it. It also dismisses
 after ten seconds, on Escape, on the close button, or on an observed outside click.
 Using a media control restarts the timeout. Dismissal leaves the background process
-running. Media buttons remain clickable without taking focus from the current app.
+running.
+
+Opening with the shortcut focuses the source selector. **Tab** and **Shift+Tab**
+move the focus ring between available controls. **Enter** or **Space** activates a
+button. In the session menu, use **Up/Down** to highlight a row and **Enter** or
+**Space** to select it. **Escape** closes the menu first. On the progress bar,
+**Left/Right** seeks five seconds within the player's supported range.
+
+Dismissal returns focus to the previous application if the flyout still owns it.
+Opening with a tray click or `--show` keeps the current application focused.
 
 Click the tray icon to toggle the flyout. Right-click it for settings, reload,
 startup, preferences, and exit. If the shortcut is unavailable, the tray remains
@@ -220,6 +229,10 @@ The ordinary test suite covers selection priorities, same-app preferences,
 configuration validation and safe edits, shortcut parsing, CLI arguments, timeline
 validation/extrapolation and seek ranges, progress-bar pointer interactions,
 startup quoting, native pixel blending, and screen geometry.
+Headless keyboard tests cover forward and reverse traversal, skipping unavailable
+controls, session selection, seek commands, and Escape ordering. Check the visible
+ring in both themes, shortcut activation, focus restoration, and clicking another
+application during dismissal on an interactive Windows desktop.
 
 Two desktop integration suites are ignored by default because they require real
 Windows services and an interactive shell. Close any running flyout before running
@@ -261,8 +274,8 @@ run explicitly on a suitable local machine.
 
 - Player support and metadata accuracy depend on the provider's GSMTC implementation.
   Reopening the flyout refreshes sessions and metadata; resume reconnects the manager.
-- Escape and outside clicks use 50 ms checks only while visible. Very short input
-  may be missed. This preserves foreground focus without installing input hooks.
+- Outside clicks and Escape in pointer-only mode use 50 ms checks while visible.
+  Very short input may be missed.
 - Timelines can be incomplete or inaccurate. Unknown/live ranges are hidden;
   extrapolation cannot correct a provider that reports an incorrect position.
 - Windows exposes no persistent public ID for otherwise identical sessions from
@@ -270,8 +283,7 @@ run explicitly on a suitable local machine.
   source-relative order is used as a final identity fallback.
 - Artwork over 8 MiB encoded, 8192 pixels in either dimension, or 16 million pixels
   is rejected. Missing/invalid artwork uses the built-in fallback.
-- The minimal native backend does not expose a Windows UI Automation tree or full
-  keyboard navigation. Buttons are intended for pointer use without taking focus.
+- The minimal native backend does not expose a Windows UI Automation tree.
 - Windows security desktops and some exclusive full-screen applications can cover
   ordinary topmost tool windows. Builds are portable and unsigned.
 
