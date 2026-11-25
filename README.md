@@ -63,7 +63,12 @@ cargo build --locked --release
 .\target\release\media-flyout.exe
 ```
 
-The executable starts hidden, without a console or permanent main window.
+The first time you launch Media Flyout yourself, a welcome screen explains the
+controls and offers **Open settings**. Choose **Got it** to leave it in the tray.
+The guide appears once per Windows user on this PC. **Start with Windows** runs
+quietly, even if you have never opened the guide.
+
+On later launches the executable starts in the tray.
 Press **Ctrl + Space** to show it and press again to dismiss it. It also dismisses
 after ten seconds, on Escape, on the close button, or on an observed outside click.
 Using a media control restarts the timeout. Dismissal leaves the background process

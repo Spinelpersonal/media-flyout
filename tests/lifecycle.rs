@@ -38,7 +38,7 @@ impl HiddenApp {
             core::{PCWSTR, PWSTR},
         };
         let mut command: Vec<u16> = format!(
-            "\"{}\" --config \"{}\"",
+            "\"{}\" --startup --config \"{}\"",
             env!("CARGO_BIN_EXE_media-flyout"),
             config.display()
         )
@@ -306,6 +306,77 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) {
 
 #[test]
 #[ignore = "Requires the interactive Windows desktop, shell, and no running flyout"]
+fn startup_leaves_welcome_pending_for_the_first_manual_launch() {
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    assert!(
+        window().is_none(),
+        "Close the existing flyout before this test"
+    );
+    let profile = std::env::temp_dir().join(format!(
+        "media-flyout-welcome-profile-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&profile).unwrap();
+    let config = profile.join("test.toml");
+    std::fs::write(
+        &config,
+        "shortcut = 'Ctrl+Alt+Shift+F24'\nanimations = false\n",
+    )
+    .unwrap();
+    let marker = profile.join("MediaFlyout").join("welcome-seen");
+    let launch = || {
+        let mut cmd = command(&config);
+        cmd.env("LOCALAPPDATA", &profile);
+        cmd
+    };
+    // SAFETY: This read-only lookup identifies the guide by its class and title.
+    let welcome = || unsafe { FindWindowW(w!("#32770"), w!("Welcome to Media Flyout")).ok() };
+    let timeout = Duration::from_secs(10);
+    let mut app = App(launch().arg("--startup").spawn().unwrap());
+    wait_until(timeout, || window().is_some());
+    assert!(launch().arg("--show").status().unwrap().success());
+    wait_until(timeout, || {
+        window().is_some_and(|hwnd| {
+            // SAFETY: Read-only visibility query on the test flyout.
+            unsafe { IsWindowVisible(hwnd).as_bool() }
+        })
+    });
+    assert!(welcome().is_none() && !marker.exists());
+    assert!(launch().status().unwrap().success());
+    wait_until(timeout, || welcome().is_some());
+    let guide = welcome().unwrap();
+    assert!(marker.exists());
+    // SAFETY: Close only the guide opened by this test.
+    unsafe {
+        PostMessageW(
+            Some(guide),
+            WM_CLOSE,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+    }
+    wait_until(timeout, || welcome().is_none());
+    assert!(launch().arg("--quit").status().unwrap().success());
+    wait_until(timeout, || app.0.try_wait().unwrap().is_some());
+
+    let mut app = App(launch().spawn().unwrap());
+    wait_until(timeout, || window().is_some());
+    assert!(launch().status().unwrap().success());
+    wait_until(timeout, || {
+        window().is_some_and(|hwnd| {
+            // SAFETY: A later manual activation shows the existing flyout.
+            unsafe { IsWindowVisible(hwnd).as_bool() }
+        })
+    });
+    assert!(welcome().is_none());
+    assert!(launch().arg("--quit").status().unwrap().success());
+    wait_until(timeout, || app.0.try_wait().unwrap().is_some());
+    std::fs::remove_dir_all(profile).unwrap();
+}
+
+#[test]
+#[ignore = "Requires the interactive Windows desktop, shell, and no running flyout"]
 fn background_visibility_single_instance_and_clean_exit() {
     assert!(
         window().is_none(),
@@ -320,7 +391,10 @@ fn background_visibility_single_instance_and_clean_exit() {
     let initial = media_flyout::hotkey::RegisteredHotkey::register(HWND::default(), 99, shortcut)
         .expect("test shortcut must be free");
     drop(initial);
-    let mut app = App(command(&config).spawn().expect("start flyout"));
+    let mut app = App(command(&config)
+        .arg("--startup")
+        .spawn()
+        .expect("start flyout"));
     wait_until(Duration::from_secs(10), || window().is_some());
     let hwnd = window().expect("native window");
     // SAFETY: These read-only queries inspect the test process's live HWND.

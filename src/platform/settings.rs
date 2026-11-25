@@ -35,25 +35,9 @@ pub fn autostart(enabled: bool, config_path: &Path) -> Result<(), Box<dyn std::e
         if !enabled {
             // A custom test/profile configuration must not remove another
             // installation's startup entry. Only manage the entry for this file.
-            let mut existing = [0u16; 1024];
-            let mut bytes = (existing.len() * 2) as u32;
-            let status = RegGetValueW(
-                HKEY_CURRENT_USER,
-                w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-                w!("MediaFlyout"),
-                RRF_RT_REG_SZ,
-                None,
-                Some(existing.as_mut_ptr().cast()),
-                Some(&mut bytes),
-            );
-            if status != ERROR_SUCCESS {
+            let Some(existing) = startup_entry() else {
                 return Ok(());
-            }
-            let length = existing
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(existing.len());
-            let existing = String::from_utf16_lossy(&existing[..length]);
+            };
             let suffix = format!(" --config \"{}\"", config_path.display());
             if !existing.to_lowercase().ends_with(&suffix.to_lowercase()) {
                 return Ok(());
@@ -87,6 +71,37 @@ pub fn autostart(enabled: bool, config_path: &Path) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn startup_entry() -> Option<String> {
+    let mut value = [0u16; 1024];
+    let mut bytes = std::mem::size_of_val(&value) as u32;
+    // SAFETY: value is a writable UTF-16 buffer with its size supplied in bytes.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            w!("MediaFlyout"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(value.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+    };
+    (status == ERROR_SUCCESS).then(|| {
+        let length = value.iter().position(|&c| c == 0).unwrap_or(value.len());
+        String::from_utf16_lossy(&value[..length])
+    })
+}
+
+// Older versions registered a config-only command. Recognize it before the
+// first settings application migrates the Run value to the explicit flag.
+pub fn is_legacy_startup(config: &Path) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let legacy = format!("\"{}\" --config \"{}\"", exe.display(), config.display());
+    startup_entry().is_some_and(|entry| entry.to_lowercase() == legacy.to_lowercase())
+}
+
 fn startup_command(executable: &Path, config: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let executable = executable
         .to_str()
@@ -97,7 +112,7 @@ fn startup_command(executable: &Path, config: &Path) -> Result<String, Box<dyn s
     if executable.contains(['"', '\r', '\n']) || config.contains(['"', '\r', '\n']) {
         return Err("Invalid startup path".into());
     }
-    let command = format!("\"{executable}\" --config \"{config}\"");
+    let command = format!("\"{executable}\" --startup --config \"{config}\"");
     if command.encode_utf16().count() > 259 {
         return Err("Startup command exceeds the Windows Run key's 260-character limit".into());
     }
@@ -146,7 +161,7 @@ mod tests {
                 Path::new("C:\\My Settings\\config.toml")
             )
             .expect("command"),
-            "\"C:\\Program Files\\Flyout.exe\" --config \"C:\\My Settings\\config.toml\""
+            "\"C:\\Program Files\\Flyout.exe\" --startup --config \"C:\\My Settings\\config.toml\""
         );
         assert!(startup_command(Path::new("bad\"path.exe"), Path::new("config.toml")).is_err());
         assert!(startup_command(Path::new(&"x".repeat(260)), Path::new("config.toml")).is_err());

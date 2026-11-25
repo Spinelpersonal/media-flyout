@@ -1,12 +1,17 @@
+mod dialog;
 mod geometry;
 mod instance;
 mod native;
 mod settings;
 mod settings_dialog;
 mod source;
+mod welcome;
 
+pub(crate) use instance::activate_existing;
 pub use instance::{Instance, request_exit, request_reload};
 pub use native::{BackendState, NativeEvent, NativeWindow, initialize};
+pub(crate) use settings::is_legacy_startup;
 pub use settings::{autostart, show_error, system_light_theme};
 pub use settings_dialog::open_settings;
 pub(crate) use source::app_display_name;
+pub(crate) use welcome::welcome_on_first_launch;

@@ -29,6 +29,13 @@ pub struct RunOptions {
     pub config_path: Option<PathBuf>,
 }
 
+enum Launch {
+    Manual,
+    Startup,
+    Show,
+    Preview(PathBuf),
+}
+
 struct Controller {
     flyout: Flyout,
     native: Rc<NativeWindow>,
@@ -51,6 +58,31 @@ struct Controller {
 }
 
 impl Controller {
+    fn welcome(self: &Rc<Self>) -> bool {
+        let shortcut = self
+            .hotkey
+            .borrow()
+            .as_ref()
+            .map(|h| h.shortcut().to_string());
+        let weak = Rc::downgrade(self);
+        match platform::welcome_on_first_launch(
+            shortcut.as_deref(),
+            &self.config.borrow().path,
+            move || {
+                if let Some(controller) = weak.upgrade() {
+                    controller.menu_action(MenuAction::OpenConfig);
+                }
+            },
+        ) {
+            Ok(visible) => visible,
+            Err(error) => {
+                self.tray
+                    .notify(&format!("Cannot open welcome guide: {error}"));
+                false
+            }
+        }
+    }
+
     fn show(self: &Rc<Self>) {
         self.native.position_at_top();
         if let Err(error) = self.flyout.show() {
@@ -185,6 +217,11 @@ impl Controller {
 
     fn native_event(self: &Rc<Self>, event: NativeEvent) {
         match event {
+            NativeEvent::ManualLaunch => {
+                if !self.welcome() {
+                    self.show();
+                }
+            }
             NativeEvent::Shortcut if !self.flyout.window().is_visible() => {
                 self.show();
                 if self.flyout.window().is_visible() && self.native.focus_for_shortcut() {
@@ -550,9 +587,38 @@ impl Controller {
 }
 
 pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let launch = if let Some(path) = options.preview {
+        Launch::Preview(path)
+    } else if options.show {
+        Launch::Show
+    } else if options
+        .config_path
+        .as_deref()
+        .is_some_and(platform::is_legacy_startup)
+    {
+        Launch::Startup
+    } else {
+        Launch::Manual
+    };
+    run_with_launch(launch, options.config_path)
+}
+
+pub fn run_at_startup(config_path: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_launch(Launch::Startup, config_path)
+}
+
+fn run_with_launch(
+    launch: Launch,
+    config_path: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let Some(_instance) = platform::Instance::acquire()? else {
-        if options.preview.is_some() {
-            return Err("Close the running flyout before creating a preview".into());
+        match launch {
+            Launch::Manual => platform::activate_existing(true)?,
+            Launch::Show => platform::activate_existing(false)?,
+            Launch::Preview(_) => {
+                return Err("Close the running flyout before creating a preview".into());
+            }
+            Launch::Startup => {}
         }
         return Ok(());
     };
@@ -560,7 +626,7 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     let flyout = Flyout::new()?;
     let native = backend.window().ok_or("Native flyout was not created")?;
     let tray = TrayIcon::new(native.handle())?;
-    let config = ConfigStore::load(options.config_path)?;
+    let config = ConfigStore::load(config_path)?;
     let controller = Rc::new(Controller {
         flyout,
         native,
@@ -716,12 +782,16 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     *controller.service.borrow_mut() = Some(service);
     slint::platform::update_timers_and_animations();
-    if options.show || options.preview.is_some() {
-        controller.show();
+    match launch {
+        Launch::Manual => {
+            controller.welcome();
+        }
+        Launch::Show | Launch::Preview(_) => controller.show(),
+        Launch::Startup => {}
     }
     let preview_result = Rc::new(RefCell::new(Ok(())));
     let preview_timer = slint::Timer::default();
-    if let Some(path) = options.preview {
+    if let Launch::Preview(path) = launch {
         let weak = controller.flyout.as_weak();
         let result = preview_result.clone();
         preview_timer.start(

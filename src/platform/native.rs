@@ -49,6 +49,7 @@ struct Fade {
 
 #[derive(Clone, Copy)]
 pub enum NativeEvent {
+    ManualLaunch,
     Toggle,
     Shortcut,
     Escape,
@@ -185,7 +186,9 @@ impl Platform for Backend {
                 // Refresh Slint's cached monotonic clock after an arbitrarily long
                 // blocking wait, before callbacks create timers from this message.
                 slint::platform::update_timers_and_animations();
-                if super::settings_dialog::handle_message(&message) {
+                if super::welcome::handle_message(&message)
+                    || super::settings_dialog::handle_message(&message)
+                {
                     continue;
                 }
                 let _ = TranslateMessage(&message);
@@ -903,7 +906,11 @@ unsafe extern "system" fn window_proc(
                 window.emit(NativeEvent::Shortcut);
             }
             super::instance::SHOW_MESSAGE => {
-                window.emit(NativeEvent::Show);
+                window.emit(if wparam.0 == 1 {
+                    NativeEvent::ManualLaunch
+                } else {
+                    NativeEvent::Show
+                });
             }
             super::instance::EXIT_MESSAGE => {
                 window.emit(NativeEvent::Exit);

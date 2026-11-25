@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use media_flyout::{config::ConfigStore, media, ui::RunOptions};
+use media_flyout::{
+    config::ConfigStore,
+    media,
+    ui::{self, RunOptions},
+};
 use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 #[derive(Default)]
@@ -42,8 +46,8 @@ impl Arguments {
                             .into(),
                     );
                 }
-                "--show" | "--quit" | "--reload" | "--diagnose" | "--watch" | "--play-pause"
-                | "--next" | "--previous" | "--help" | "-h" | "--version" => {}
+                "--startup" | "--show" | "--quit" | "--reload" | "--diagnose" | "--watch"
+                | "--play-pause" | "--next" | "--previous" | "--help" | "-h" | "--version" => {}
                 _ => {
                     return Err(format!(
                         "Unknown argument: {argument}. Use --help for usage."
@@ -70,9 +74,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse(std::env::args_os().skip(1))?;
     let command = arguments.command.as_deref().unwrap_or("");
     match command {
+        "--startup" => return ui::run_at_startup(arguments.config),
         "" | "--show" | "--preview" => {
-            return media_flyout::ui::run(RunOptions {
-                show: !command.is_empty(),
+            return ui::run(RunOptions {
+                show: command == "--show",
                 preview: arguments.preview,
                 config_path: arguments.config,
             });
@@ -91,7 +96,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "--help" | "-h" => {
             println!(
-                "Media Flyout\n\nStart without arguments to run in the tray. Ctrl+Space toggles the flyout.\n\n  --show                 Show the running flyout, or start it visible\n  --quit                 Exit the running flyout\n  --reload               Reload the running flyout's settings\n  --config <path>        Use a specific TOML file\n  --diagnose             Print a snapshot of real Windows media sessions\n  --watch                Print event-driven media updates until interrupted\n  --play-pause           Send play/pause to the selected session\n  --previous / --next    Skip tracks in the selected session\n  --preview <path.bmp>   Save a rendered preview and exit (close other instances first)\n  --version             Print the version"
+                "Media Flyout\n\nStart without arguments for the first-run guide and tray icon. Ctrl+Space toggles the flyout by default.\n\n  --startup              Start quietly in the tray for Windows sign-in\n  --show                 Show the running flyout, or start it visible\n  --quit                 Exit the running flyout\n  --reload               Reload the running flyout's settings\n  --config <path>        Use a specific TOML file\n  --diagnose             Print a snapshot of real Windows media sessions\n  --watch                Print event-driven media updates until interrupted\n  --play-pause           Send play/pause to the selected session\n  --previous / --next    Skip tracks in the selected session\n  --preview <path.bmp>   Save a rendered preview and exit (close other instances first)\n  --version             Print the version"
             );
             return Ok(());
         }
