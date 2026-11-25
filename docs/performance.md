@@ -77,11 +77,17 @@ rasterization, and the native BGR pixel format avoids a presentation copy. There
 is no GPU rendering framework, browser runtime, permanent frame loop, config-file
 polling, or media polling timer. Opaque surfaces keep rendering predictable.
 
-The only recurring UI timers are visible input checks (20 Hz), visible advancing
+Recurring UI timers include visible input checks (20 Hz), visible advancing
 progress (1 Hz), and brief transitions (about 120 ms at 16 ms intervals). Auto-dismiss
 uses one deadline. Hidden idle operation blocks on native messages and worker
 notifications. Album pixels and pending work are bounded; system font and renderer
 caches are retained to keep reopening responsive.
+
+The optional audio spectrum adds one capture worker and up to about 30 updates
+per second while enabled and visible. The worker coalesces changes and stops
+posting frames once the bars settle. Dismissal releases the worker and WASAPI
+stream. The measurements above predate this feature. To measure its cost, repeat
+the visible playback, silence, and hidden samples with `show_visualizer = true`.
 
 Release builds use optimization level 3, thin LTO, one code-generation unit,
 symbol stripping, a static C runtime, and abort-on-panic. Correctness and recoverable error handling

@@ -2,6 +2,7 @@ mod artwork;
 mod model;
 mod source;
 mod timeline;
+pub(crate) mod visualizer;
 mod worker;
 
 pub use model::*;

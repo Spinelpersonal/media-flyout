@@ -1,7 +1,8 @@
 # Architecture
 
-Media Flyout uses three application threads: the main Win32/Slint thread, a media
-worker, and one artwork decoder. Windows also creates its own COM/WinRT thread-pool
+The main Win32/Slint thread, media worker, and artwork decoder run throughout
+the application's lifetime. The optional spectrum uses a worker while visible.
+Windows also creates its own COM/WinRT thread-pool
 threads. The application does not run an asynchronous runtime or a second GUI
 framework.
 
@@ -54,6 +55,19 @@ The UI mailbox retains only the latest snapshot and at most one queued UI
 notification. Unchanged artwork is not converted to a new Slint image on playback
 or timeline updates. Controls are checked again immediately before dispatch, since
 a player can change its supported capabilities after the UI update.
+
+## Audio spectrum
+
+When the spectrum is enabled, showing the flyout starts shared-mode WASAPI
+loopback on the default multimedia render endpoint. Its worker downmixes the
+endpoint's float or PCM samples into a rolling 2048-sample window. Roughly every
+33 ms it applies a Hann window and a real FFT, groups bins into 24 frequency
+bands, and smooths each bar with a fast attack and slower decay. Silence skips
+the FFT. Only changed heights trigger UI updates, through a single pending frame.
+The worker checks the default endpoint once per second and retries capture
+errors after two seconds. Hiding or disabling the spectrum wakes the worker,
+releases the stream and its buffers, and joins the thread.
+[Microsoft's WASAPI loopback documentation](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)
 
 ## Window and rendering
 

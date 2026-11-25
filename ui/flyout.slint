@@ -82,6 +82,8 @@ export component Flyout inherits Window {
     callback toggle-lyrics;
     callback lyrics-ready;
     in property <image> artwork;
+    in property <[int]> spectrum;
+    callback spectrum-updated;
     in property <bool> has-artwork;
     in property <bool> playing;
     in property <bool> can-toggle;
@@ -178,6 +180,11 @@ export component Flyout inherits Window {
             x: 20px; y: 143px; width: 106px; height: 16px;
             text: root.playing ? "PLAYING" : root.can-toggle ? "PAUSED" : "READY";
             color: Palette.muted; font-size: 9px; horizontal-alignment: center;
+        }
+        for level[index] in root.spectrum: Rectangle {
+            x: 25px + index * 4px; y: 178px - self.height;
+            width: 3px; height: level * 1px; border-radius: 1px;
+            background: Palette.accent-text;
         }
         ActionButton {
             x: parent.width - 32px; y: 12px; width: 20px; height: 20px;

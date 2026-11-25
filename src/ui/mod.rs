@@ -36,6 +36,7 @@ struct Controller {
     hotkey: RefCell<Option<RegisteredHotkey>>,
     dismiss_timer: slint::Timer,
     progress_timer: slint::Timer,
+    visualizer: RefCell<Option<media::visualizer::Visualizer>>,
     lyrics: RefCell<lyrics::Panel>,
     lyric_timer: slint::Timer,
     latest: RefCell<Snapshot>,
@@ -58,9 +59,11 @@ impl Controller {
         }
         self.arm_dismiss();
         self.sync_progress();
+        self.sync_visualizer();
     }
 
     fn hide(&self) {
+        self.stop_visualizer();
         self.native.restore_focus();
         self.flyout.set_keyboard_mode(false);
         self.close_lyrics();
@@ -77,6 +80,27 @@ impl Controller {
             self.hide();
         } else {
             self.show();
+        }
+    }
+
+    fn stop_visualizer(&self) {
+        self.visualizer.borrow_mut().take();
+        self.flyout.set_spectrum(Default::default());
+    }
+
+    fn sync_visualizer(&self) {
+        if !self.config.borrow().settings.show_visualizer || !self.flyout.window().is_visible() {
+            self.stop_visualizer();
+        } else if self.visualizer.borrow().is_none() {
+            let weak = self.flyout.as_weak();
+            if let Ok(capture) = media::visualizer::Visualizer::start(move || {
+                let _ = weak.upgrade_in_event_loop(|flyout| flyout.invoke_spectrum_updated());
+            }) {
+                self.flyout.set_spectrum(
+                    Rc::new(slint::VecModel::from(vec![0; media::visualizer::BARS])).into(),
+                );
+                *self.visualizer.borrow_mut() = Some(capture);
+            }
         }
     }
 
@@ -267,6 +291,7 @@ impl Controller {
         self.update_tooltip();
         self.native.configure(&settings);
         self.apply_theme();
+        self.sync_visualizer();
         if let Err(error) = platform::autostart(settings.autostart, &path) {
             self.warnings
                 .borrow_mut()
@@ -530,6 +555,7 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         hotkey: RefCell::new(None),
         dismiss_timer: slint::Timer::default(),
         progress_timer: slint::Timer::default(),
+        visualizer: RefCell::default(),
         lyrics: RefCell::default(),
         lyric_timer: slint::Timer::default(),
         latest: RefCell::new(Snapshot::default()),
@@ -541,6 +567,23 @@ pub fn run(options: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     });
     controller.apply_settings();
     lyrics::connect(&controller);
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_spectrum_updated(move || {
+        if let Some(controller) = weak.upgrade()
+            && let Some(levels) = controller
+                .visualizer
+                .borrow()
+                .as_ref()
+                .and_then(|v| v.take_levels())
+        {
+            let model = controller.flyout.get_spectrum();
+            for (i, level) in levels.into_iter().map(i32::from).enumerate() {
+                if model.row_data(i) != Some(level) {
+                    model.set_row_data(i, level);
+                }
+            }
+        }
+    });
     let weak = Rc::downgrade(&controller);
     controller.native.set_event_handler(move |event| {
         if let Some(controller) = weak.upgrade() {

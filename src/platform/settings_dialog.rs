@@ -117,6 +117,11 @@ fn fields(s: &Settings) -> Vec<Field> {
             Check(s.show_progress),
         ),
         Field("animations", "Animate flyout", Check(s.animations)),
+        Field(
+            "show_visualizer",
+            "Show audio spectrum",
+            Check(s.show_visualizer),
+        ),
         Field("autostart", "Start with Windows", Check(s.autostart)),
     ]
 }

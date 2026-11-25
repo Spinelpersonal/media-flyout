@@ -90,6 +90,13 @@ mod tests {
         flyout.set_can_toggle(true);
         flyout.set_has_timeline(true);
         flyout.set_progress(0.75);
+        flyout.set_spectrum(
+            Rc::new(slint::VecModel::from(vec![
+                12;
+                crate::media::visualizer::BARS
+            ]))
+            .into(),
+        );
         flyout.show().unwrap();
         let palette = flyout.global::<Palette>();
         for light in [false, true] {
@@ -104,6 +111,9 @@ mod tests {
                 assert_eq!(rgb(216, 137), cover.unwrap_or([153, 160, 165]));
                 let bar = palette.get_accent_text();
                 assert_eq!(rgb(320, 167), [bar.red(), bar.green(), bar.blue()]);
+                for i in 0..crate::media::visualizer::BARS {
+                    assert_eq!(rgb(26 + i * 4, 173), [bar.red(), bar.green(), bar.blue()]);
+                }
             }
         }
     }

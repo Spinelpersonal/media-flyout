@@ -51,6 +51,7 @@ pub struct Settings {
     pub autostart: bool,
     pub animations: bool,
     pub show_progress: bool,
+    pub show_visualizer: bool,
     pub dismiss_after_seconds: u16,
     pub dismiss_on_outside_click: bool,
 }
@@ -68,6 +69,7 @@ impl Default for Settings {
             autostart: false,
             animations: true,
             show_progress: true,
+            show_visualizer: false,
             dismiss_after_seconds: 10,
             dismiss_on_outside_click: true,
         }
@@ -285,6 +287,10 @@ fn parse(document: &DocumentMut) -> (Settings, Vec<String>) {
                 .as_bool()
                 .map(|b| settings.show_progress = b)
                 .is_some(),
+            "show_visualizer" => value
+                .as_bool()
+                .map(|b| settings.show_visualizer = b)
+                .is_some(),
             "dismiss_on_outside_click" => value
                 .as_bool()
                 .map(|b| settings.dismiss_on_outside_click = b)
@@ -310,6 +316,9 @@ mod tests {
         assert_eq!(settings, Settings::default());
         assert!(warnings.is_empty());
         assert!(!settings.autostart);
+        assert!(!settings.show_visualizer);
+        let (enabled, warnings) = parse(&"show_visualizer = true".parse().unwrap());
+        assert!(warnings.is_empty() && enabled.show_visualizer);
     }
     #[test]
     fn invalid_fields_do_not_discard_valid_preferences() {

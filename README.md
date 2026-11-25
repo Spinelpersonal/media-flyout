@@ -112,6 +112,7 @@ remember_preferred_app = false
 theme = "dark"
 animations = true
 show_progress = true
+show_visualizer = false
 dismiss_after_seconds = 10
 dismiss_on_outside_click = true
 autostart = false
@@ -133,6 +134,12 @@ Progress is estimated between Windows events and clamps to the duration. Click
 the progress bar or drag it to seek forward or backward. Dragging previews the
 target time and seeks when released, within the player's supported seek range.
 Players without seeking support keep a read-only progress bar.
+
+Enable **Show audio spectrum** in settings to display 24 artwork-coloured bars
+beneath the cover. The bars follow all sound on the default Windows multimedia
+output, including audio from other apps. Capture starts when the flyout opens
+and stops on dismissal or when you turn the setting off. Silence lets the bars
+settle to zero. Switching output devices reconnects the spectrum automatically.
 
 Invalid fields use their defaults with a warning; valid fields remain usable.
 Malformed TOML is never overwritten, and a malformed reload retains the last
@@ -233,6 +240,12 @@ Headless keyboard tests cover forward and reverse traversal, skipping unavailabl
 controls, session selection, seek commands, and Escape ordering. Check the visible
 ring in both themes, shortcut activation, focus restoration, and clicking another
 application during dismissal on an interactive Windows desktop.
+
+Spectrum tests use generated tones and silence. For a desktop check, enable the
+spectrum during playback, pause all output, switch between speakers and headphones,
+then disable it while the flyout is open. Check that the bars follow the sound,
+settle during silence, and recover after reconnecting a device. Compare hidden
+CPU and thread counts with the spectrum enabled and disabled.
 
 Two desktop integration suites are ignored by default because they require real
 Windows services and an interactive shell. Close any running flyout before running
