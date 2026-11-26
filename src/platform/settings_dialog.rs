@@ -1,6 +1,8 @@
 //! A modeless Windows settings dialog. Dialog units scale with the system font.
 use crate::{
-    config::{Monitor, Position, Settings, Theme},
+    config::{
+        ControlColorMode, Monitor, Position, Settings, Theme, format_hex_color, parse_hex_color,
+    },
     hotkey::Shortcut,
 };
 use std::{
@@ -10,7 +12,7 @@ use std::{
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, WPARAM},
-        UI::WindowsAndMessaging::*,
+        UI::{Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*},
     },
     core::PCWSTR,
 };
@@ -31,6 +33,12 @@ enum Input {
     Check(bool),
 }
 struct Field(&'static str, &'static str, Input);
+
+const COLOR_MODES: &[(&str, &str)] = &[
+    ("Default (grey)", "default"),
+    ("Dominant artwork colour", "artwork"),
+    ("Custom", "custom"),
+];
 
 fn fields(s: &Settings) -> Vec<Field> {
     use Input::*;
@@ -90,6 +98,23 @@ fn fields(s: &Settings) -> Vec<Field> {
                     Theme::System => 2,
                 },
             ),
+        ),
+        Field(
+            "control_color_mode",
+            "Media control colour",
+            Choice(
+                COLOR_MODES,
+                match s.control_color_mode {
+                    ControlColorMode::Default => 0,
+                    ControlColorMode::Artwork => 1,
+                    ControlColorMode::Custom => 2,
+                },
+            ),
+        ),
+        Field(
+            "custom_control_color",
+            "Custom hex (#RRGGBB)",
+            Text(format_hex_color(s.custom_control_color)),
         ),
         Field(
             "dismiss_after_seconds",
@@ -245,6 +270,38 @@ fn send(hwnd: HWND, id: i32, msg: u32, w: usize, l: isize) -> isize {
 }
 
 impl Dialog {
+    fn field_id(&self, key: &str) -> i32 {
+        100 + self
+            .fields
+            .iter()
+            .position(|field| field.0 == key)
+            .expect("known settings field") as i32
+    }
+
+    fn custom_color_selected(&self) -> bool {
+        let index = send(
+            self.hwnd.get(),
+            self.field_id("control_color_mode"),
+            CB_GETCURSEL,
+            0,
+            0,
+        );
+        COLOR_MODES
+            .get(index as usize)
+            .is_some_and(|entry| entry.1 == "custom")
+    }
+
+    fn update_color_input(&self) {
+        // SAFETY: This edit control belongs to the live dialog on the current thread.
+        unsafe {
+            if let Ok(input) =
+                GetDlgItem(Some(self.hwnd.get()), self.field_id("custom_control_color"))
+            {
+                let _ = EnableWindow(input, self.custom_color_selected());
+            }
+        }
+    }
+
     fn initialize(&self, hwnd: HWND) {
         self.hwnd.set(hwnd);
         for (i, Field(_, _, input)) in self.fields.iter().enumerate() {
@@ -263,6 +320,7 @@ impl Dialog {
                 _ => {}
             }
         }
+        self.update_color_input();
     }
 
     fn changes(&self) -> Result<Changes, String> {
@@ -270,6 +328,9 @@ impl Dialog {
         let mut changes = Vec::new();
         for (i, Field(key, label, input)) in self.fields.iter().enumerate() {
             let id = 100 + i as i32;
+            if *key == "custom_control_color" && !self.custom_color_selected() {
+                continue;
+            }
             let value = match input {
                 Input::Choice(items, old) => {
                     let index = send(hwnd, id, CB_GETCURSEL, 0, 0) as usize;
@@ -311,12 +372,19 @@ impl Dialog {
                         if matches!(input,Input::Text(old) if old==&text) {
                             continue;
                         }
-                        if *key == "shortcut" {
-                            text.parse::<Shortcut>()?;
-                        } else if text.len() > 512 || text.chars().any(char::is_control) {
-                            return Err("Enter an application ID of up to 512 bytes.".into());
+                        match *key {
+                            "custom_control_color" => {
+                                format_hex_color(parse_hex_color(&text)?).into()
+                            }
+                            "shortcut" => {
+                                text.parse::<Shortcut>()?;
+                                text.into()
+                            }
+                            _ if text.len() > 512 || text.chars().any(char::is_control) => {
+                                return Err("Enter an application ID of up to 512 bytes.".into());
+                            }
+                            _ => text.into(),
                         }
-                        text.into()
                     }
                 }
             };
@@ -338,6 +406,13 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, w: WPARAM, _: LPARAM
         WM_NCDESTROY => {
             OPEN.take();
             0
+        }
+        WM_COMMAND
+            if (w.0 >> 16) == CBN_SELCHANGE as usize
+                && w.0 as u16 == dialog.field_id("control_color_mode") as u16 =>
+        {
+            dialog.update_color_input();
+            1
         }
         WM_COMMAND if w.0 as u16 == IDOK.0 as u16 => {
             let result = dialog.changes().and_then(|changes| {
@@ -377,6 +452,52 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, w: WPARAM, _: LPARAM
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn custom_colour_is_editable_and_validated_only_in_custom_mode() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+        let hwnd = create_dialog(&Settings::default(), |_| Ok(())).unwrap();
+        let dialog = OPEN.with_borrow(Clone::clone).unwrap();
+        let mode = dialog.field_id("control_color_mode");
+        let hex = dialog.field_id("custom_control_color");
+        let select_mode = |index| {
+            send(hwnd, mode, CB_SETCURSEL, index, 0);
+            // SAFETY: Notify our dialog just as its combo box does on a user selection.
+            unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_COMMAND,
+                    Some(WPARAM((CBN_SELCHANGE as usize) << 16 | mode as usize)),
+                    None,
+                );
+            }
+        };
+        // SAFETY: The hidden dialog and its child controls belong to the test thread.
+        unsafe {
+            let input = GetDlgItem(Some(hwnd), hex).unwrap();
+            assert!(!IsWindowEnabled(input).as_bool());
+            select_mode(2);
+            assert!(IsWindowEnabled(input).as_bool());
+            SetDlgItemTextW(hwnd, hex, windows::core::w!("#12GG56")).unwrap();
+            assert!(dialog.changes().is_err());
+            select_mode(0);
+            assert!(!IsWindowEnabled(input).as_bool());
+            assert_eq!(dialog.changes().unwrap().len(), 1);
+            select_mode(2);
+            SetDlgItemTextW(hwnd, hex, windows::core::w!("2a9d8f")).unwrap();
+            let values = dialog.changes().unwrap();
+            assert_eq!(values.len(), 2);
+            assert_eq!(
+                (values[0].0, values[0].1.as_str()),
+                ("control_color_mode", Some("custom"))
+            );
+            assert_eq!(
+                (values[1].0, values[1].1.as_str()),
+                ("custom_control_color", Some("#2A9D8F"))
+            );
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
     #[test]
     fn native_form_loads_edits_saves_and_cancels() {
         let saved = Rc::new(RefCell::new(Vec::new()));

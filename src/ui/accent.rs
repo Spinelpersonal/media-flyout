@@ -1,4 +1,5 @@
 use super::Palette;
+use crate::config::{ControlColorMode, DEFAULT_CONTROL_COLOR, Settings};
 use slint::Color;
 
 fn luminance(rgb: [u8; 3]) -> f32 {
@@ -30,8 +31,12 @@ fn readable(accent: [u8; 3], background: f32, light: bool) -> [u8; 3] {
     [end as u8; 3]
 }
 
-pub(super) fn apply(palette: &Palette, cover: Option<[u8; 3]>) {
-    let accent = cover.unwrap_or([153, 160, 165]);
+pub(super) fn apply(palette: &Palette, settings: &Settings, cover: Option<[u8; 3]>) {
+    let accent = match settings.control_color_mode {
+        ControlColorMode::Default => DEFAULT_CONTROL_COLOR,
+        ControlColorMode::Artwork => cover.unwrap_or(DEFAULT_CONTROL_COLOR),
+        ControlColorMode::Custom => settings.custom_control_color,
+    };
     let [r, g, b] = accent;
     palette.set_accent(Color::from_rgb_u8(r, g, b));
     let l = luminance(accent);
@@ -67,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_controls_follow_the_cover_and_reset_without_art() {
+    fn rendered_controls_apply_each_colour_mode_in_both_themes() {
         use crate::ui::Flyout;
         use slint::{
             ComponentHandle, PhysicalSize, PlatformError,
@@ -103,14 +108,31 @@ mod tests {
         flyout.set_app_volume(64);
         for light in [false, true] {
             palette.set_light(light);
-            for cover in [Some([15, 60, 150]), Some([220, 45, 30]), None] {
-                apply(&palette, cover);
+            let cover = [15, 60, 150];
+            let custom = [220, 45, 30];
+            for (mode, art, expected) in [
+                (ControlColorMode::Artwork, Some(cover), cover),
+                (ControlColorMode::Artwork, None, DEFAULT_CONTROL_COLOR),
+                (
+                    ControlColorMode::Default,
+                    Some(cover),
+                    DEFAULT_CONTROL_COLOR,
+                ),
+                (ControlColorMode::Custom, Some(cover), custom),
+                (ControlColorMode::Custom, None, custom),
+            ] {
+                let settings = Settings {
+                    control_color_mode: mode,
+                    custom_control_color: custom,
+                    ..Settings::default()
+                };
+                apply(&palette, &settings, art);
                 let pixels = flyout.window().take_snapshot().unwrap();
                 let rgb = |x: usize, y: usize| {
                     let p = pixels.as_slice()[y * pixels.width() as usize + x];
                     [p.r, p.g, p.b]
                 };
-                assert_eq!(rgb(216, 137), cover.unwrap_or([153, 160, 165]));
+                assert_eq!(rgb(216, 137), expected);
                 let bar = palette.get_accent_text();
                 assert_eq!(rgb(248, 121), [bar.red(), bar.green(), bar.blue()]);
                 let empty = palette.get_border();

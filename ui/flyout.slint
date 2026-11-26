@@ -399,7 +399,7 @@ export component Flyout inherits Window {
                     return reject;
                 }
             }
-            Text { x: parent.width - 14px; width: 12px; text: "\u{e70d}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.muted; vertical-alignment: center; }
+            Text { x: parent.width - 14px; width: 12px; text: "\u{e70d}"; font-family: "Segoe MDL2 Assets"; font-size: 9px; color: Palette.accent-text; vertical-alignment: center; }
             TouchArea { clicked => { root.toggle-menu(); } }
         }
         if root.lyrics-available || root.lyrics-open: ActionButton {
@@ -409,7 +409,7 @@ export component Flyout inherits Window {
             background: self.hovered || root.lyrics-open ? Palette.elevated : transparent;
             label: root.lyrics-open ? "Hide lyrics" : "Show lyrics";
             clicked => { root.toggle-lyrics(); }
-            Text { text: "Lyrics"; color: Palette.secondary; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Lyrics"; color: Palette.accent-text; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
         }
         if root.lyrics-open: Rectangle {
             x: 20px; y: 195px; width: parent.width - 40px; height: parent.height - self.y - 14px;
@@ -459,7 +459,7 @@ export component Flyout inherits Window {
                     border-width: root.keyboard-mode && index == root.active-row ? 2px : 0px;
                     border-color: Palette.text;
                     background: row-touch.has-hover ? Palette.hover : index == root.selected-session ? Palette.pressed : transparent;
-                    Text { x: 12px; width: parent.width - 24px; text: label; font-size: 12px; color: Palette.text; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
+                    Text { x: 12px; width: parent.width - 24px; text: label; font-size: 12px; color: index == root.selected-session ? Palette.accent-text : Palette.text; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
                     row-touch := TouchArea { clicked => { root.session-menu = false; root.select-session(index); } }
                 }
             }

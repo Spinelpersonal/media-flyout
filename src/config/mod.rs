@@ -39,6 +39,33 @@ pub enum Theme {
     System,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ControlColorMode {
+    Default,
+    #[default]
+    Artwork,
+    Custom,
+}
+
+pub const DEFAULT_CONTROL_COLOR: [u8; 3] = [153, 160, 165];
+
+pub(crate) fn parse_hex_color(text: &str) -> Result<[u8; 3], &'static str> {
+    let text = text.trim();
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    let error = "Enter a six-digit hex colour, such as #2A9D8F.";
+    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(error);
+    }
+    let [_, r, g, b] = u32::from_str_radix(digits, 16)
+        .map_err(|_| error)?
+        .to_be_bytes();
+    Ok([r, g, b])
+}
+
+pub(crate) fn format_hex_color([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub shortcut: String,
@@ -48,6 +75,8 @@ pub struct Settings {
     pub preferred_app: Option<String>,
     pub remember_preferred_app: bool,
     pub theme: Theme,
+    pub control_color_mode: ControlColorMode,
+    pub custom_control_color: [u8; 3],
     pub autostart: bool,
     pub animations: bool,
     pub show_progress: bool,
@@ -66,6 +95,8 @@ impl Default for Settings {
             preferred_app: None,
             remember_preferred_app: false,
             theme: Theme::Dark,
+            control_color_mode: ControlColorMode::Artwork,
+            custom_control_color: DEFAULT_CONTROL_COLOR,
             autostart: false,
             animations: true,
             show_progress: true,
@@ -260,6 +291,21 @@ fn parse(document: &DocumentMut) -> (Settings, Vec<String>) {
                 })
                 .map(|t| settings.theme = t)
                 .is_some(),
+            "control_color_mode" => value
+                .as_str()
+                .and_then(|s| match s {
+                    "default" => Some(ControlColorMode::Default),
+                    "artwork" => Some(ControlColorMode::Artwork),
+                    "custom" => Some(ControlColorMode::Custom),
+                    _ => None,
+                })
+                .map(|mode| settings.control_color_mode = mode)
+                .is_some(),
+            "custom_control_color" => value
+                .as_str()
+                .and_then(|s| parse_hex_color(s).ok())
+                .map(|rgb| settings.custom_control_color = rgb)
+                .is_some(),
             "preferred_app" => value
                 .as_str()
                 .filter(|s| s.len() <= 512 && !s.chars().any(char::is_control))
@@ -329,6 +375,37 @@ mod tests {
         assert_eq!(settings.preferred_app.as_deref(), Some("Spotify.exe"));
         assert!(!settings.autostart);
         assert_eq!(warnings.len(), 5);
+    }
+    #[test]
+    fn colour_settings_accept_rgb_and_fall_back_per_field() {
+        let (legacy, warnings) = parse(&DocumentMut::new());
+        assert!(warnings.is_empty());
+        assert_eq!(legacy.control_color_mode, ControlColorMode::Artwork);
+        for (name, mode) in [
+            ("default", ControlColorMode::Default),
+            ("artwork", ControlColorMode::Artwork),
+            ("custom", ControlColorMode::Custom),
+        ] {
+            let doc = format!("control_color_mode = '{name}'\ncustom_control_color = '#aB019e'")
+                .parse()
+                .unwrap();
+            let (settings, warnings) = parse(&doc);
+            assert!(warnings.is_empty());
+            assert_eq!(settings.control_color_mode, mode);
+            assert_eq!(settings.custom_control_color, [0xAB, 0x01, 0x9E]);
+        }
+        let (settings, warnings) = parse(
+            &"control_color_mode = 'missing'\ncustom_control_color = '#12345G'\ntheme = 'light'"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(settings.control_color_mode, ControlColorMode::Artwork);
+        assert_eq!(settings.custom_control_color, DEFAULT_CONTROL_COLOR);
+        assert_eq!(settings.theme, Theme::Light);
+        for invalid in ["", "#123", "+12345", "#12345678", "é1234"] {
+            assert!(parse_hex_color(invalid).is_err());
+        }
     }
     #[test]
     fn edits_preserve_comments_and_reject_malformed_files() {

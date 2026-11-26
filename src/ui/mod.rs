@@ -297,7 +297,11 @@ impl Controller {
             .borrow()
             .as_ref()
             .and_then(|art| art.dominant_color);
-        accent::apply(&self.flyout.global::<Palette>(), color);
+        accent::apply(
+            &self.flyout.global::<Palette>(),
+            &self.config.borrow().settings,
+            color,
+        );
     }
 
     fn update_tooltip(&self) {

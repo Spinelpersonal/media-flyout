@@ -19,7 +19,7 @@ No account connection or Spotify Web API is required.
 > unresolved. See [diagnostic findings](docs/gecko-youtube-progress.md).
 
 - Real GSMTC metadata, artwork, playback state, source, and optional progress.
-- Playback controls pick up the dominant cover colour and use grey when artwork is unavailable.
+- Playback controls can follow the dominant cover colour, use neutral grey, or use a custom hex colour.
 - Open **Lyrics** beside the source selector to follow the current track.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
 - Automatic selection of playing media, manual session switching, and saved app preferences.
@@ -124,6 +124,12 @@ While the panel is open, Media Flyout looks up the current recording on [LRCLIB]
 Right-click the tray icon and choose **Open settings**. Choose **Save** to apply your changes immediately. Preferences are stored in `%APPDATA%\MediaFlyout\config.toml`.
 [config.example.toml](config.example.toml) documents every option.
 
+Under **Media control colour**, choose **Default (grey)** for a fixed neutral
+colour, **Dominant artwork colour** to follow the current cover, or **Custom**
+to enter a hex colour such as `#2A9D8F`. Choose **Save** to apply it. Artwork
+colouring is selected initially and falls back to grey when a cover is unavailable.
+The flyout remembers your custom colour when you switch modes.
+
 ```toml
 shortcut = "Ctrl+Space"
 position = "top-center"
@@ -132,6 +138,8 @@ margin = 20
 preferred_app = ""
 remember_preferred_app = false
 theme = "dark"
+control_color_mode = "artwork"
+custom_control_color = "#99A0A5"
 animations = true
 show_progress = true
 show_visualizer = false
@@ -147,6 +155,8 @@ autostart = false
 | `monitor` | `active` (foreground app), `cursor`, `primary` |
 | `margin` | 0–256 logical pixels inside the monitor's taskbar-aware work area |
 | `theme` | `dark`, `light`, `system` |
+| `control_color_mode` | `default`, `artwork`, `custom` |
+| `custom_control_color` | Six hexadecimal RGB digits, with an optional leading `#` |
 | `preferred_app` | Exact GSMTC application ID, such as `Spotify.exe`; empty for no preference |
 | `dismiss_after_seconds` | 0–600; `0` disables the timeout |
 
@@ -157,7 +167,7 @@ the progress bar or drag it to seek forward or backward. Dragging previews the
 target time and seeks when released, within the player's supported seek range.
 Players without seeking support keep a read-only progress bar.
 
-Enable **Show audio spectrum** in settings to display 24 artwork-coloured bars
+Enable **Show audio spectrum** in settings to display 24 bars in the control colour
 beneath the cover. The bars follow all sound on the default Windows multimedia
 output, including audio from other apps. Capture starts when the flyout opens
 and stops on dismissal or when you turn the setting off. Silence lets the bars
