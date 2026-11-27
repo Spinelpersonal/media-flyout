@@ -25,6 +25,12 @@ show_visualizer = false
 # Keep a local listening history for the tray's Listening history panel.
 listening_history = false
 
+# Track-change notifications use the configured monitor and edge margin.
+notifications_enabled = false
+notification_seconds = 4 # 1–60
+notification_position = "bottom-right" # same choices as position
+notification_hide_fullscreen = true
+
 # Set to 0 to keep the flyout open until explicitly dismissed.
 dismiss_after_seconds = 10
 dismiss_on_outside_click = true

@@ -2,6 +2,7 @@ mod dialog;
 mod geometry;
 mod history_dialog;
 mod instance;
+pub(crate) mod monitor;
 mod native;
 mod settings;
 mod settings_dialog;

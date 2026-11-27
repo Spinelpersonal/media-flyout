@@ -1,6 +1,7 @@
 mod artwork;
 pub(crate) mod mixer;
 mod model;
+pub(crate) mod notifications;
 mod source;
 mod timeline;
 pub(crate) mod visualizer;

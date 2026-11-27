@@ -466,3 +466,76 @@ export component Flyout inherits Window {
         }
     }
 }
+
+export component TrackNotification inherits Window {
+    title: "Now playing";
+    width: 328px;
+    height: 78px;
+    no-frame: true;
+    background: Palette.surface;
+    default-font-family: "Segoe UI";
+    in property <string> track-title;
+    in property <string> artist;
+    in property <string> player;
+    in property <image> artwork;
+    in property <bool> has-artwork;
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: Palette.border;
+        background: Palette.surface;
+
+        Rectangle {
+            x: 12px;
+            y: 12px;
+            width: 54px;
+            height: 54px;
+            border-radius: 9px;
+            background: Palette.elevated;
+            clip: true;
+            if root.has-artwork : Image {
+                source: root.artwork;
+                width: parent.width;
+                height: parent.height;
+                image-fit: cover;
+            }
+            if !root.has-artwork : Text {
+                text: "♪";
+                color: Palette.accent-text;
+                font-size: 25px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            x: 78px;
+            width: parent.width - 90px;
+            y: 9px;
+            height: parent.height - 18px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.player;
+                color: Palette.secondary;
+                font-size: 11px;
+                overflow: elide;
+            }
+            Text {
+                text: root.track-title;
+                color: Palette.text;
+                font-size: 15px;
+                font-weight: 650;
+                overflow: elide;
+            }
+            if root.artist != "" : Text {
+                text: root.artist;
+                color: Palette.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+    }
+}

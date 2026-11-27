@@ -12,14 +12,16 @@ use crate::{
     config::{ConfigStore, Theme},
     history::History,
     hotkey::RegisteredHotkey,
+    media::notifications::{Notifications, TrackStart},
     media::{self, Action, Artwork, PlaybackState, Snapshot},
-    platform::{self, NativeEvent, NativeWindow},
+    platform::{self, BackendState, NativeEvent, NativeWindow},
     tray::{MenuAction, TrayIcon},
 };
 
 mod accent;
 mod lyrics;
 mod mixer;
+mod notification;
 
 slint::include_modules!();
 
@@ -38,6 +40,11 @@ enum Launch {
 }
 
 struct Controller {
+    backend: Rc<BackendState>,
+    notifications: Arc<Notifications>,
+    notification: RefCell<Option<notification::Popup>>,
+    notification_timer: slint::Timer,
+    fullscreen_timer: slint::Timer,
     history: Arc<History>,
     flyout: Flyout,
     native: Rc<NativeWindow>,
@@ -86,6 +93,7 @@ impl Controller {
     }
 
     fn show(self: &Rc<Self>) {
+        self.hide_notification();
         self.native.position_at_top();
         if let Err(error) = self.flyout.show() {
             self.tray.notify(&error.to_string());
@@ -290,6 +298,9 @@ impl Controller {
             Theme::System => platform::system_light_theme(),
         };
         self.flyout.global::<Palette>().set_light(light);
+        if let Some(popup) = self.notification.borrow().as_ref() {
+            popup.set_theme(light, &self.config.borrow().settings);
+        }
         self.update_accent();
     }
 
@@ -322,6 +333,9 @@ impl Controller {
         let path = store.path.clone();
         *self.warnings.borrow_mut() = store.warnings.clone();
         drop(store);
+        self.notifications
+            .set_enabled(settings.notifications_enabled);
+        self.hide_notification();
         if let Err(error) = self.history.set_enabled(settings.listening_history) {
             self.warnings
                 .borrow_mut()
@@ -529,21 +543,8 @@ impl Controller {
             _ => true,
         };
         if changed {
-            let image = snapshot
-                .track
-                .artwork
-                .as_ref()
-                .map(|artwork| {
-                    slint::Image::from_rgba8(
-                        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                            &artwork.rgba,
-                            artwork.width,
-                            artwork.height,
-                        ),
-                    )
-                })
-                .unwrap_or_default();
-            self.flyout.set_artwork(image);
+            self.flyout
+                .set_artwork(artwork_image(snapshot.track.artwork.as_deref()));
             self.flyout
                 .set_has_artwork(snapshot.track.artwork.is_some());
             *self.artwork.borrow_mut() = snapshot.track.artwork.clone();
@@ -648,6 +649,11 @@ fn run_with_launch(
     let tray = TrayIcon::new(native.handle())?;
     let config = ConfigStore::load(config_path)?;
     let controller = Rc::new(Controller {
+        backend,
+        notifications: Arc::default(),
+        notification: RefCell::default(),
+        notification_timer: slint::Timer::default(),
+        fullscreen_timer: slint::Timer::default(),
         history: Arc::new(History::local()),
         flyout,
         native,
@@ -785,24 +791,39 @@ fn run_with_launch(
             controller.finish_seek(false);
         }
     });
-    let mailbox = Arc::new(Mutex::new(None::<Snapshot>));
+    let mailbox = Arc::new(Mutex::new(None::<(Snapshot, Option<TrackStart>)>));
     let pending = mailbox.clone();
     let weak = Rc::downgrade(&controller);
     controller.flyout.on_media_updated(move || {
         let snapshot = pending.lock().ok().and_then(|mut slot| slot.take());
-        if let (Some(controller), Some(snapshot)) = (weak.upgrade(), snapshot) {
+        if let (Some(controller), Some((snapshot, notice))) = (weak.upgrade(), snapshot) {
+            if let Some(notice) = notice {
+                controller.notify_track(notice, &snapshot);
+            } else {
+                controller.update_notification_artwork(&snapshot);
+            }
             controller.update(snapshot);
         }
     });
     let weak = controller.flyout.as_weak();
     let preferred = controller.config.borrow().settings.preferred_app.clone();
-    let service = media::MediaService::with_history(
+    let preview = matches!(launch, Launch::Preview(_));
+    let service = media::MediaService::with_features(
         preferred,
-        (!matches!(launch, Launch::Preview(_))).then(|| controller.history.clone()),
-        move |snapshot| {
+        (!preview).then(|| controller.history.clone()),
+        (!preview).then(|| controller.notifications.clone()),
+        move |snapshot, notice| {
             let should_schedule = mailbox
                 .lock()
-                .map(|mut slot| slot.replace(snapshot).is_none())
+                .map(|mut slot| {
+                    let previous = slot.take();
+                    let schedule = previous.is_none();
+                    *slot = Some((
+                        snapshot,
+                        notice.or_else(|| previous.and_then(|(_, notice)| notice)),
+                    ));
+                    schedule
+                })
                 .unwrap_or(false);
             if should_schedule {
                 let weak = weak.clone();
@@ -844,6 +865,7 @@ fn run_with_launch(
         );
     }
     let event_loop_result = slint::run_event_loop_until_quit();
+    controller.hide_notification();
     controller.hide();
     controller.native.finish_transition();
     controller.history.set_enabled(false)?;
@@ -851,6 +873,20 @@ fn run_with_launch(
     event_loop_result?;
     std::mem::replace(&mut *preview_result.borrow_mut(), Ok(()))?;
     Ok(())
+}
+
+fn artwork_image(artwork: Option<&Artwork>) -> slint::Image {
+    artwork
+        .map(|artwork| {
+            slint::Image::from_rgba8(
+                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &artwork.rgba,
+                    artwork.width,
+                    artwork.height,
+                ),
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn save_bitmap(

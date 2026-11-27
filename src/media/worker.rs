@@ -20,6 +20,7 @@ use windows::{
 };
 use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
 
+use super::notifications::{Notifications, TrackStart, TrackStarts};
 use super::{Controls, PlaybackState, SessionInfo, Snapshot, Timeline, Track, select_session};
 use crate::history::History;
 
@@ -78,13 +79,16 @@ impl MediaService {
         preferred: Option<String>,
         on_snapshot: impl Fn(Snapshot) + Send + 'static,
     ) -> std::io::Result<Self> {
-        Self::with_history(preferred, None, on_snapshot)
+        Self::with_features(preferred, None, None, move |snapshot, _| {
+            on_snapshot(snapshot)
+        })
     }
 
-    pub(crate) fn with_history(
+    pub(crate) fn with_features(
         preferred: Option<String>,
         history: Option<Arc<History>>,
-        on_snapshot: impl Fn(Snapshot) + Send + 'static,
+        notifications: Option<Arc<Notifications>>,
+        on_snapshot: impl Fn(Snapshot, Option<TrackStart>) + Send + 'static,
     ) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::sync_channel(16);
         let notifier = Notifier {
@@ -98,12 +102,16 @@ impl MediaService {
                 worker_notifier,
                 preferred,
                 history.as_deref(),
+                notifications.as_deref(),
                 &on_snapshot,
             ) {
-                on_snapshot(Snapshot {
-                    status: Some(format!("Media service unavailable: {error}")),
-                    ..Snapshot::default()
-                });
+                on_snapshot(
+                    Snapshot {
+                        status: Some(format!("Media service unavailable: {error}")),
+                        ..Snapshot::default()
+                    },
+                    None,
+                );
             }
         })?;
         Ok(Self {
@@ -300,7 +308,7 @@ impl WatchedSession {
             .and_then(|info| info.PlaybackStatus())
         {
             Ok(Status::Playing) => PlaybackState::Playing,
-            Ok(Status::Paused) => PlaybackState::Paused,
+            Ok(Status::Paused | Status::Changing) => PlaybackState::Paused,
             _ => PlaybackState::Stopped,
         }
     }
@@ -666,7 +674,8 @@ fn run(
     notifier: Notifier,
     mut preferred: Option<String>,
     history: Option<&History>,
-    on_snapshot: &impl Fn(Snapshot),
+    notifications: Option<&Notifications>,
+    on_snapshot: &impl Fn(Snapshot, Option<TrackStart>),
 ) -> Result<()> {
     let _apartment = Apartment::new()?;
     let decoded = Arc::new(Mutex::new(None::<super::artwork::Decoded>));
@@ -704,24 +713,38 @@ fn run(
             ..Snapshot::default()
         }
     };
-    let publish = |snapshot: &mut Snapshot, sessions: &mut [WatchedSession]| {
-        if let Some(history) = history.filter(|h| h.enabled()) {
+    let mut track_starts = TrackStarts::default();
+    let publish = |snapshot: &mut Snapshot,
+                   sessions: &mut [WatchedSession],
+                   track_starts: Option<&mut TrackStarts>| {
+        let history = history.filter(|h| h.enabled());
+        let generation = notifications.map_or(0, Notifications::generation);
+        if history.is_some() || !generation.is_multiple_of(2) {
             for (info, session) in snapshot.sessions.iter().zip(sessions.iter_mut()) {
                 if Some(info.id) != snapshot.selected && info.state == PlaybackState::Playing {
                     let _ = session.refresh_track();
                 }
             }
-            let observed = snapshot
-                .sessions
-                .iter()
-                .zip(sessions.iter().map(|s| &s.track));
-            if let Err(error) = history.observe(observed) {
-                snapshot.status = Some(format!("Cannot record listening history: {error}"));
-            }
         }
-        on_snapshot(snapshot.clone());
+        let observed = snapshot
+            .sessions
+            .iter()
+            .zip(sessions.iter().map(|s| &s.track));
+        if let Some(history) = history
+            && let Err(error) = history.observe(observed.clone())
+        {
+            snapshot.status = Some(format!("Cannot record listening history: {error}"));
+        }
+        let notice =
+            track_starts.and_then(|starts| starts.observe(generation, snapshot.selected, observed));
+        on_snapshot(snapshot.clone(), notice);
     };
-    publish(&mut last, &mut sessions);
+    let connected = !sessions.is_empty() || (events.is_some() && last.status.is_none());
+    publish(
+        &mut last,
+        &mut sessions,
+        connected.then_some(&mut track_starts),
+    );
     while let Ok(command) = receiver.recv() {
         let mut status = None;
         match command {
@@ -743,6 +766,7 @@ fn run(
                 notifier.pending.fetch_or(TOPOLOGY, Ordering::Release);
             }
             Command::Reconnect => {
+                track_starts = TrackStarts::default();
                 sessions.clear();
                 drop(events.take());
                 events = ManagerEvents::new(&notifier).ok();
@@ -794,7 +818,8 @@ fn run(
                     )),
                     ..Snapshot::default()
                 };
-                publish(&mut last, &mut sessions);
+                track_starts = TrackStarts::default();
+                publish(&mut last, &mut sessions, None);
                 continue;
             }
         }
@@ -805,7 +830,8 @@ fn run(
                 ),
                 ..Snapshot::default()
             };
-            publish(&mut last, &mut sessions);
+            track_starts = TrackStarts::default();
+            publish(&mut last, &mut sessions, None);
             continue;
         };
         if let Some(result) = decoded.lock().unwrap_or_else(|p| p.into_inner()).take()
@@ -823,7 +849,7 @@ fn run(
             manual,
             artwork.as_ref(),
         );
-        publish(&mut last, &mut sessions);
+        publish(&mut last, &mut sessions, Some(&mut track_starts));
     }
     Ok(())
 }

@@ -1,7 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::{
         Arc, Mutex,
         atomic::{AtomicIsize, Ordering},
@@ -116,6 +116,7 @@ impl EventLoopProxy for Proxy {
 
 pub struct BackendState {
     window: RefCell<Option<Rc<NativeWindow>>>,
+    notification: RefCell<Weak<NativeWindow>>,
     shared: Arc<Shared>,
 }
 
@@ -123,18 +124,27 @@ impl BackendState {
     pub fn window(&self) -> Option<Rc<NativeWindow>> {
         self.window.borrow().clone()
     }
+
+    pub(crate) fn notification(&self) -> Option<Rc<NativeWindow>> {
+        self.notification.borrow().upgrade()
+    }
 }
 
 struct Backend(Rc<BackendState>);
 
 impl Platform for Backend {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        if self.0.window.borrow().is_some() {
-            return Err("Only one flyout window is supported".into());
+        let notification = self.0.window.borrow().is_some();
+        if notification && self.0.notification().is_some() {
+            return Err("Both flyout windows already exist".into());
         }
-        let window = NativeWindow::new(self.0.shared.clone())
+        let window = NativeWindow::new(self.0.shared.clone(), notification)
             .map_err(|e| PlatformError::Other(e.to_string()))?;
-        *self.0.window.borrow_mut() = Some(window.clone());
+        if notification {
+            *self.0.notification.borrow_mut() = Rc::downgrade(&window);
+        } else {
+            *self.0.window.borrow_mut() = Some(window.clone());
+        }
         Ok(window)
     }
 
@@ -208,6 +218,7 @@ pub fn initialize() -> Result<Rc<BackendState>, Box<dyn std::error::Error>> {
     }
     let state = Rc::new(BackendState {
         window: RefCell::new(None),
+        notification: RefCell::default(),
         shared: Arc::new(Shared::default()),
     });
     slint::platform::set_platform(Box::new(Backend(state.clone())))?;
@@ -238,6 +249,7 @@ impl TargetPixel for Bgra {
 }
 
 pub struct NativeWindow {
+    notification: bool,
     window: Window,
     renderer: SoftwareRenderer,
     hwnd: Cell<HWND>,
@@ -261,14 +273,20 @@ pub struct NativeWindow {
 }
 
 impl NativeWindow {
-    fn new(shared: Arc<Shared>) -> windows::core::Result<Rc<Self>> {
+    fn new(shared: Arc<Shared>, notification: bool) -> windows::core::Result<Rc<Self>> {
+        let initial = if notification {
+            PhysicalSize::new(328, 78)
+        } else {
+            PhysicalSize::new(452, 196)
+        };
         let native = Rc::new_cyclic(|weak| Self {
+            notification,
             window: Window::new(weak.clone()),
             renderer: SoftwareRenderer::new_with_repaint_buffer_type(
                 RepaintBufferType::ReusedBuffer,
             ),
             hwnd: Cell::new(HWND::default()),
-            size: Cell::new(PhysicalSize::new(452, 196)),
+            size: Cell::new(initial),
             visible: Cell::new(false),
             dirty: Cell::new(true),
             tracking_mouse: Cell::new(false),
@@ -294,25 +312,45 @@ impl NativeWindow {
         // stable Rc allocation outlives the HWND, and only its UI thread accesses it.
         unsafe {
             let instance = GetModuleHandleW(None)?;
+            let class_name = if notification {
+                w!("MediaFlyoutNotification")
+            } else {
+                w!("MediaFlyoutWindow")
+            };
             let class = WNDCLASSW {
                 lpfnWndProc: Some(window_proc),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
-                lpszClassName: w!("MediaFlyoutWindow"),
+                lpszClassName: class_name,
                 ..Default::default()
             };
             if RegisterClassW(&class) == 0 {
-                return Err(windows::core::Error::from_thread());
+                let error = windows::core::Error::from_thread();
+                if error.code()
+                    != windows::core::HRESULT::from_win32(
+                        windows::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS.0,
+                    )
+                {
+                    return Err(error);
+                }
+            }
+            let mut extended_style = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED;
+            if notification {
+                extended_style |= WS_EX_TRANSPARENT;
             }
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
-                w!("MediaFlyoutWindow"),
-                w!("Media Flyout"),
+                extended_style,
+                class_name,
+                if notification {
+                    w!("Now playing")
+                } else {
+                    w!("Media Flyout")
+                },
                 WS_POPUP,
                 0,
                 0,
-                452,
-                196,
+                initial.width as i32,
+                initial.height as i32,
                 None,
                 None,
                 Some(instance.into()),
@@ -325,18 +363,19 @@ impl NativeWindow {
                 255,
                 LWA_ALPHA,
             )?;
-            native
-                .taskbar_created
-                .set(RegisterWindowMessageW(w!("TaskbarCreated")));
-            native.shared.hwnd.store(hwnd.0 as isize, Ordering::Release);
+            if !notification {
+                native
+                    .taskbar_created
+                    .set(RegisterWindowMessageW(w!("TaskbarCreated")));
+                native.shared.hwnd.store(hwnd.0 as isize, Ordering::Release);
+            }
             let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
             native.dispatch(WindowEvent::ScaleFactorChanged {
                 scale_factor: scale,
             });
-            native.resize(PhysicalSize::new(
-                (452.0 * scale) as u32,
-                (196.0 * scale) as u32,
-            ));
+            native.resize(
+                LogicalSize::new(initial.width as f32, initial.height as f32).to_physical(scale),
+            );
         }
         Ok(native)
     }
@@ -480,23 +519,30 @@ impl NativeWindow {
     }
 
     pub fn position_at_top(&self) {
-        // SAFETY: All structures are initialized and pointers are valid for the call.
+        let (position, monitor, margin) = self.placement.get();
+        self.place_on_monitor(super::monitor::target(monitor), position, margin);
+    }
+
+    pub(crate) fn position_notification(
+        &self,
+        monitor: HMONITOR,
+        settings: &crate::config::Settings,
+    ) {
+        let old_size = self.size.get();
+        self.place_on_monitor(monitor, settings.notification_position, settings.margin);
+        if self.size.get() != old_size {
+            self.place_on_monitor(monitor, settings.notification_position, settings.margin);
+        }
+    }
+
+    pub(crate) fn monitor(&self) -> HMONITOR {
+        // SAFETY: Queries the monitor associated with our live HWND.
+        unsafe { MonitorFromWindow(self.hwnd.get(), MONITOR_DEFAULTTOPRIMARY) }
+    }
+
+    fn place_on_monitor(&self, monitor: HMONITOR, position: crate::config::Position, margin: u16) {
+        // SAFETY: Both the monitor info buffer and the HWND are valid for these calls.
         unsafe {
-            let (position, monitor, margin) = self.placement.get();
-            let monitor = match monitor {
-                crate::config::Monitor::Active => {
-                    MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY)
-                }
-                crate::config::Monitor::Cursor => {
-                    let mut point = windows::Win32::Foundation::POINT::default();
-                    let _ = GetCursorPos(&mut point);
-                    MonitorFromPoint(point, MONITOR_DEFAULTTOPRIMARY)
-                }
-                crate::config::Monitor::Primary => MonitorFromPoint(
-                    windows::Win32::Foundation::POINT::default(),
-                    MONITOR_DEFAULTTOPRIMARY,
-                ),
-            };
             let mut info = MONITORINFO {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
@@ -644,6 +690,31 @@ impl WindowAdapter for NativeWindow {
     }
     fn set_visible(&self, visible: bool) -> Result<(), PlatformError> {
         let was_visible = self.visible.replace(visible);
+        if self.notification {
+            let visibility = if visible {
+                SWP_SHOWWINDOW
+            } else {
+                SWP_HIDEWINDOW
+            };
+            // SAFETY: SetWindowPos changes visibility on the owning thread without
+            // activating the window or inheriting the launcher’s show command.
+            if let Err(error) = unsafe {
+                SetWindowPos(
+                    self.handle(),
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    visibility | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                )
+            } {
+                self.visible.set(was_visible);
+                return Err(PlatformError::Other(error.to_string()));
+            }
+            self.request_redraw();
+            return Ok(());
+        }
         if visible {
             self.position_at_top();
             self.request_redraw();
@@ -742,7 +813,9 @@ impl WindowAdapter for NativeWindow {
 
 impl Drop for NativeWindow {
     fn drop(&mut self) {
-        self.shared.hwnd.store(0, Ordering::Release);
+        if !self.notification && !self.hwnd.get().is_invalid() {
+            self.shared.hwnd.store(0, Ordering::Release);
+        }
         // SAFETY: Clear the borrowed userdata pointer before destroying the window;
         // subsequent destroy messages fall through to DefWindowProc.
         unsafe {
@@ -770,6 +843,9 @@ unsafe extern "system" fn window_proc(
         let Some(window) = pointer.as_ref() else {
             return DefWindowProcW(hwnd, message, wparam, lparam);
         };
+        if window.notification && message == WM_NCHITTEST {
+            return LRESULT(HTTRANSPARENT as isize);
+        }
         if message == window.taskbar_created.get() && message != 0 {
             window.emit(NativeEvent::TrayCreated);
             return LRESULT(0);
@@ -892,7 +968,9 @@ unsafe extern "system" fn window_proc(
                     scale_factor: scale,
                 });
                 window.resize(size.to_physical(scale));
-                let _ = PostMessageW(Some(hwnd), REPOSITION_MESSAGE, WPARAM(0), LPARAM(0));
+                if !window.notification {
+                    let _ = PostMessageW(Some(hwnd), REPOSITION_MESSAGE, WPARAM(0), LPARAM(0));
+                }
             }
             WM_TIMER if wparam.0 == TIMER => {
                 let _ = KillTimer(Some(hwnd), TIMER);
@@ -927,15 +1005,17 @@ unsafe extern "system" fn window_proc(
                 _ => {}
             },
             WM_DISPLAYCHANGE => {
-                if window.visible.get() {
+                if !window.notification && window.visible.get() {
                     window.position_at_top();
                 }
             }
             WM_SETTINGCHANGE => {
-                if window.visible.get() {
+                if !window.notification && window.visible.get() {
                     window.position_at_top();
                 }
-                window.emit(NativeEvent::SettingsChanged);
+                if !window.notification {
+                    window.emit(NativeEvent::SettingsChanged);
+                }
             }
             REPOSITION_MESSAGE => {
                 if window.visible.get() {

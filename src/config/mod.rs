@@ -23,6 +23,20 @@ pub enum Position {
     BottomRight,
 }
 
+impl Position {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "top-center" => Some(Self::TopCenter),
+            "top-left" => Some(Self::TopLeft),
+            "top-right" => Some(Self::TopRight),
+            "bottom-center" => Some(Self::BottomCenter),
+            "bottom-left" => Some(Self::BottomLeft),
+            "bottom-right" => Some(Self::BottomRight),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Monitor {
     #[default]
@@ -82,6 +96,10 @@ pub struct Settings {
     pub show_progress: bool,
     pub show_visualizer: bool,
     pub listening_history: bool,
+    pub notifications_enabled: bool,
+    pub notification_seconds: u16,
+    pub notification_position: Position,
+    pub notification_hide_fullscreen: bool,
     pub dismiss_after_seconds: u16,
     pub dismiss_on_outside_click: bool,
 }
@@ -103,6 +121,10 @@ impl Default for Settings {
             show_progress: true,
             show_visualizer: false,
             listening_history: false,
+            notifications_enabled: false,
+            notification_seconds: 4,
+            notification_position: Position::BottomRight,
+            notification_hide_fullscreen: true,
             dismiss_after_seconds: 10,
             dismiss_on_outside_click: true,
         }
@@ -256,18 +278,26 @@ fn parse(document: &DocumentMut) -> (Settings, Vec<String>) {
                 .is_some(),
             "position" => value
                 .as_str()
-                .and_then(|s| {
-                    Some(match s {
-                        "top-center" => Position::TopCenter,
-                        "top-left" => Position::TopLeft,
-                        "top-right" => Position::TopRight,
-                        "bottom-center" => Position::BottomCenter,
-                        "bottom-left" => Position::BottomLeft,
-                        "bottom-right" => Position::BottomRight,
-                        _ => return None,
-                    })
-                })
+                .and_then(Position::parse)
                 .map(|p| settings.position = p)
+                .is_some(),
+            "notification_position" => value
+                .as_str()
+                .and_then(Position::parse)
+                .map(|p| settings.notification_position = p)
+                .is_some(),
+            "notifications_enabled" => value
+                .as_bool()
+                .map(|b| settings.notifications_enabled = b)
+                .is_some(),
+            "notification_seconds" => value
+                .as_integer()
+                .filter(|n| (1..=60).contains(n))
+                .map(|n| settings.notification_seconds = n as u16)
+                .is_some(),
+            "notification_hide_fullscreen" => value
+                .as_bool()
+                .map(|b| settings.notification_hide_fullscreen = b)
                 .is_some(),
             "monitor" => value
                 .as_str()
@@ -369,11 +399,41 @@ mod tests {
         assert!(warnings.is_empty());
         assert!(!settings.autostart);
         assert!(!settings.listening_history);
+        assert!(!settings.notifications_enabled);
         let (enabled, warnings) = parse(&"listening_history = true".parse().unwrap());
         assert!(warnings.is_empty() && enabled.listening_history);
         assert!(!settings.show_visualizer);
         let (enabled, warnings) = parse(&"show_visualizer = true".parse().unwrap());
         assert!(warnings.is_empty() && enabled.show_visualizer);
+    }
+
+    #[test]
+    fn notification_settings_parse_independently_from_main_flyout() {
+        let (settings, warnings) = parse(
+            &r#"
+            notifications_enabled = true
+            notification_seconds = 1
+            notification_position = "top-left"
+            notification_hide_fullscreen = false
+        "#
+            .parse()
+            .unwrap(),
+        );
+        assert!(warnings.is_empty());
+        assert!(settings.notifications_enabled);
+        assert_eq!(settings.notification_seconds, 1);
+        assert_eq!(settings.notification_position, Position::TopLeft);
+        assert_eq!(settings.position, Position::TopCenter);
+        assert!(!settings.notification_hide_fullscreen);
+        for duration in [0, 61] {
+            let (settings, warnings) = parse(
+                &format!("notification_seconds = {duration}")
+                    .parse()
+                    .unwrap(),
+            );
+            assert_eq!(settings.notification_seconds, 4);
+            assert_eq!(warnings.len(), 1);
+        }
     }
     #[test]
     fn invalid_fields_do_not_discard_valid_preferences() {

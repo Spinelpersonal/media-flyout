@@ -28,7 +28,7 @@ thread_local! { static OPEN: RefCell<Option<Rc<Dialog>>> = const { RefCell::new(
 
 enum Input {
     Text(String),
-    Number(u16, u16),
+    Number(u16, u16, u16),
     Choice(&'static [(&'static str, &'static str)], usize),
     Check(bool),
 }
@@ -40,32 +40,32 @@ const COLOR_MODES: &[(&str, &str)] = &[
     ("Custom", "custom"),
 ];
 
+fn position_choice(position: Position) -> Input {
+    Input::Choice(
+        &[
+            ("Top center", "top-center"),
+            ("Top left", "top-left"),
+            ("Top right", "top-right"),
+            ("Bottom center", "bottom-center"),
+            ("Bottom left", "bottom-left"),
+            ("Bottom right", "bottom-right"),
+        ],
+        match position {
+            Position::TopCenter => 0,
+            Position::TopLeft => 1,
+            Position::TopRight => 2,
+            Position::BottomCenter => 3,
+            Position::BottomLeft => 4,
+            Position::BottomRight => 5,
+        },
+    )
+}
+
 fn fields(s: &Settings) -> Vec<Field> {
     use Input::*;
     vec![
         Field("shortcut", "Keyboard shortcut", Text(s.shortcut.clone())),
-        Field(
-            "position",
-            "Flyout position",
-            Choice(
-                &[
-                    ("Top center", "top-center"),
-                    ("Top left", "top-left"),
-                    ("Top right", "top-right"),
-                    ("Bottom center", "bottom-center"),
-                    ("Bottom left", "bottom-left"),
-                    ("Bottom right", "bottom-right"),
-                ],
-                match s.position {
-                    Position::TopCenter => 0,
-                    Position::TopLeft => 1,
-                    Position::TopRight => 2,
-                    Position::BottomCenter => 3,
-                    Position::BottomLeft => 4,
-                    Position::BottomRight => 5,
-                },
-            ),
-        ),
+        Field("position", "Flyout position", position_choice(s.position)),
         Field(
             "monitor",
             "Monitor",
@@ -82,7 +82,7 @@ fn fields(s: &Settings) -> Vec<Field> {
                 },
             ),
         ),
-        Field("margin", "Edge margin (px)", Number(s.margin, 256)),
+        Field("margin", "Edge margin (px)", Number(s.margin, 0, 256)),
         Field(
             "theme",
             "Theme",
@@ -119,7 +119,7 @@ fn fields(s: &Settings) -> Vec<Field> {
         Field(
             "dismiss_after_seconds",
             "Hide after (s, 0 = never)",
-            Number(s.dismiss_after_seconds, 600),
+            Number(s.dismiss_after_seconds, 0, 600),
         ),
         Field(
             "preferred_app",
@@ -153,66 +153,100 @@ fn fields(s: &Settings) -> Vec<Field> {
             "Record local listening history",
             Check(s.listening_history),
         ),
+        Field(
+            "notifications_enabled",
+            "Show a notification when a track starts",
+            Check(s.notifications_enabled),
+        ),
+        Field(
+            "notification_seconds",
+            "Display duration (s)",
+            Number(s.notification_seconds, 1, 60),
+        ),
+        Field(
+            "notification_position",
+            "Position",
+            position_choice(s.notification_position),
+        ),
+        Field(
+            "notification_hide_fullscreen",
+            "Hide over fullscreen apps",
+            Check(s.notification_hide_fullscreen),
+        ),
     ]
 }
 
 use super::dialog::{BUTTON, COMBO, EDIT, LABEL, Template};
 
 fn template(fields: &[Field]) -> Vec<u32> {
-    let mut t = Template::new("Media Flyout settings", 242);
-    let mut y = 10;
-    for (i, Field(_, label, input)) in fields.iter().enumerate() {
+    let mut t = Template::new("Media Flyout settings", 474);
+    let mut general_y = 10;
+    let mut notification_y = 27;
+    t.item(
+        0xffff,
+        BUTTON,
+        "Track-change notifications",
+        [243, 10, 219, 102],
+        BS_GROUPBOX as u32,
+    );
+    for (i, Field(key, label, input)) in fields.iter().enumerate() {
+        let (x, y) = if key.starts_with("notification") {
+            (243, &mut notification_y)
+        } else {
+            (0, &mut general_y)
+        };
         let id = 100 + i as u16;
         if let Input::Check(_) = input {
             t.item(
                 id,
                 BUTTON,
                 label,
-                [12, y, 216, 12],
+                [x + 12, *y, 198, 12],
                 WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
             );
-            y += 15;
+            *y += 15;
         } else {
-            t.item(0xffff, LABEL, label, [12, y + 2, 102, 12], 0);
+            let (input_x, width) = if x == 0 { (119, 110) } else { (109, 98) };
+            t.item(0xffff, LABEL, label, [x + 12, *y + 2, input_x - 14, 12], 0);
             match input {
                 Input::Choice(..) => t.item(
                     id,
                     COMBO,
                     "",
-                    [119, y, 110, 100],
+                    [x + input_x, *y, width, 100],
                     WS_TABSTOP.0 | WS_VSCROLL.0 | CBS_DROPDOWNLIST as u32,
                 ),
                 _ => {
                     let (text, style) = match input {
                         Input::Text(text) => (text.clone(), ES_AUTOHSCROLL),
-                        Input::Number(n, _) => (n.to_string(), ES_NUMBER),
+                        Input::Number(n, ..) => (n.to_string(), ES_NUMBER),
                         _ => unreachable!(),
                     };
                     t.item(
                         id,
                         EDIT,
                         &text,
-                        [119, y, 110, 14],
+                        [x + input_x, *y, width, 14],
                         WS_TABSTOP.0 | WS_BORDER.0 | style as u32,
                     );
                 }
             }
-            y += 20;
+            *y += 20;
         }
     }
-    y += 6;
+    let y = general_y.max(notification_y) + 6;
     t.item(
         IDOK.0 as u16,
         BUTTON,
         "Save",
-        [126, y, 50, 15],
+        [356, y, 50, 15],
         WS_TABSTOP.0 | BS_DEFPUSHBUTTON as u32,
     );
     t.item(
         IDCANCEL.0 as u16,
         BUTTON,
         "Cancel",
-        [180, y, 50, 15],
+        [412, y, 50, 15],
         WS_TABSTOP.0,
     );
     t.finish(y + 25)
@@ -363,12 +397,12 @@ impl Dialog {
                         let n = GetDlgItemTextW(hwnd, id, &mut buf) as usize;
                         String::from_utf16_lossy(&buf[..n]).trim().to_owned()
                     };
-                    if let Input::Number(old, max) = input {
+                    if let Input::Number(old, min, max) = input {
                         let value = text
                             .parse::<u16>()
                             .ok()
-                            .filter(|n| n <= max)
-                            .ok_or_else(|| format!("{label} must be between 0 and {max}."))?;
+                            .filter(|n| (min..=max).contains(&n))
+                            .ok_or_else(|| format!("{label} must be between {min} and {max}."))?;
                         if value == *old {
                             continue;
                         }

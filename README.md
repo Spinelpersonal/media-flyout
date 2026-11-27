@@ -127,6 +127,12 @@ Right-click the tray icon and choose **Listening history** to see the newest lis
 
 History is stored on this PC in `%LOCALAPPDATA%\MediaFlyout\history.sqlite3`.
 
+### Track-change notifications
+
+In **Open settings**, enable **Show a notification when a track starts**. The compact flyout shows the track, artist and player. It leaves the current app focused and lets clicks pass through to the window underneath.
+
+Choose a duration from 1 to 60 seconds and one of six positions. The default is 4 seconds at the bottom right. Notifications follow the configured monitor and edge margin. **Hide over fullscreen apps** is enabled by default and checks the foreground window on the notification's display.
+
 ### Preferences
 
 Right-click the tray icon and choose **Open settings**. Choose **Save** to apply your changes immediately. Preferences are stored in `%APPDATA%\MediaFlyout\config.toml`.
@@ -152,6 +158,10 @@ animations = true
 show_progress = true
 show_visualizer = false
 listening_history = false
+notifications_enabled = false
+notification_seconds = 4
+notification_position = "bottom-right"
+notification_hide_fullscreen = true
 dismiss_after_seconds = 10
 dismiss_on_outside_click = true
 autostart = false
