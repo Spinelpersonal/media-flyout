@@ -10,10 +10,14 @@ use std::{
 
 use windows::{
     Foundation::TypedEventHandler,
-    Media::Control::{
-        GlobalSystemMediaTransportControlsSession as Session,
-        GlobalSystemMediaTransportControlsSessionManager as Manager,
-        GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+    Media::{
+        Control::{
+            GlobalSystemMediaTransportControlsSession as Session,
+            GlobalSystemMediaTransportControlsSessionManager as Manager,
+            GlobalSystemMediaTransportControlsSessionPlaybackInfo as PlaybackInfo,
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+        },
+        MediaPlaybackAutoRepeatMode as NativeRepeat,
     },
     Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
     core::{Error, HRESULT, Result, RuntimeType},
@@ -21,7 +25,9 @@ use windows::{
 use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
 
 use super::notifications::{Notifications, TrackStart, TrackStarts};
-use super::{Controls, PlaybackState, SessionInfo, Snapshot, Timeline, Track, select_session};
+use super::{
+    Controls, PlaybackState, RepeatMode, SessionInfo, Snapshot, Timeline, Track, select_session,
+};
 use crate::history::History;
 
 const TOPOLOGY: u8 = 1;
@@ -32,6 +38,8 @@ pub enum Action {
     PlayPause,
     Previous,
     Next,
+    ToggleShuffle,
+    CycleRepeat,
 }
 
 enum Command {
@@ -40,7 +48,7 @@ enum Command {
     Reconnect,
     Select(Option<u64>),
     Prefer(Option<String>),
-    Control(Action),
+    Control(Action, Option<u64>),
     Seek {
         session_id: u64,
         revision: u64,
@@ -121,7 +129,17 @@ impl MediaService {
     }
 
     pub fn control(&self, action: Action) {
-        let _ = self.notifier.sender.try_send(Command::Control(action));
+        let _ = self
+            .notifier
+            .sender
+            .try_send(Command::Control(action, None));
+    }
+
+    pub(crate) fn control_selected(&self, action: Action, session_id: u64) {
+        let _ = self
+            .notifier
+            .sender
+            .try_send(Command::Control(action, Some(session_id)));
     }
 
     pub fn seek(&self, session_id: u64, revision: u64, fraction: f64) {
@@ -355,15 +373,14 @@ impl WatchedSession {
         Ok(())
     }
 
-    fn controls(&self) -> Controls {
-        let Ok(controls) = self
-            .native
-            .GetPlaybackInfo()
-            .and_then(|info| info.Controls())
-        else {
+    fn controls(&self, state: PlaybackState) -> Controls {
+        let Ok(info) = self.native.GetPlaybackInfo() else {
             return Controls::default();
         };
-        let playing = self.state() == PlaybackState::Playing;
+        let Ok(controls) = info.Controls() else {
+            return Controls::default();
+        };
+        let playing = state == PlaybackState::Playing;
         Controls {
             play_pause: controls.IsPlayPauseToggleEnabled().unwrap_or(false)
                 || if playing {
@@ -374,6 +391,16 @@ impl WatchedSession {
             previous: controls.IsPreviousEnabled().unwrap_or(false),
             next: controls.IsNextEnabled().unwrap_or(false),
             seek: controls.IsPlaybackPositionEnabled().unwrap_or(false),
+            shuffle: if controls.IsShuffleEnabled().unwrap_or(false) {
+                shuffle(&info)
+            } else {
+                None
+            },
+            repeat: if controls.IsRepeatEnabled().unwrap_or(false) {
+                repeat(&info)
+            } else {
+                None
+            },
         }
     }
 
@@ -432,8 +459,24 @@ impl WatchedSession {
     }
 
     fn control(&self, action: Action) -> Result<bool> {
-        let controls = self.native.GetPlaybackInfo()?.Controls()?;
+        let info = self.native.GetPlaybackInfo()?;
+        let controls = info.Controls()?;
         let operation = match action {
+            Action::ToggleShuffle if controls.IsShuffleEnabled()? => {
+                let Some(active) = shuffle(&info) else {
+                    return Ok(false);
+                };
+                self.native.TryChangeShuffleActiveAsync(!active)?
+            }
+            Action::CycleRepeat if controls.IsRepeatEnabled()? => {
+                let next = match repeat(&info) {
+                    Some(RepeatMode::Off) => NativeRepeat::List,
+                    Some(RepeatMode::All) => NativeRepeat::Track,
+                    Some(RepeatMode::One) => NativeRepeat::None,
+                    None => return Ok(false),
+                };
+                self.native.TryChangeAutoRepeatModeAsync(next)?
+            }
             Action::Previous if controls.IsPreviousEnabled()? => {
                 self.native.TrySkipPreviousAsync()?
             }
@@ -454,6 +497,19 @@ impl WatchedSession {
             _ => return Ok(false),
         };
         wait(operation)
+    }
+}
+
+fn shuffle(info: &PlaybackInfo) -> Option<bool> {
+    info.IsShuffleActive().ok()?.Value().ok()
+}
+
+fn repeat(info: &PlaybackInfo) -> Option<RepeatMode> {
+    match info.AutoRepeatMode().ok()?.Value().ok()? {
+        NativeRepeat::None => Some(RepeatMode::Off),
+        NativeRepeat::List => Some(RepeatMode::All),
+        NativeRepeat::Track => Some(RepeatMode::One),
+        _ => None,
     }
 }
 
@@ -640,7 +696,7 @@ fn snapshot(
         snapshot.selected = Some(session.id);
         snapshot.manual = manual == Some(session.id);
         snapshot.state = snapshot.sessions[index].state;
-        snapshot.controls = session.controls();
+        snapshot.controls = session.controls(snapshot.state);
         snapshot.timeline = session.timeline();
         snapshot.controls.seek &= snapshot
             .timeline
@@ -772,7 +828,8 @@ fn run(
                 events = ManagerEvents::new(&notifier).ok();
                 notifier.pending.fetch_or(TOPOLOGY, Ordering::Release);
             }
-            Command::Control(action) => {
+            Command::Control(_, Some(id)) if last.selected != Some(id) => {}
+            Command::Control(action, _) => {
                 if let Some(session) = sessions.iter().find(|s| Some(s.id) == last.selected) {
                     status = match session.control(action) {
                         Ok(true) => None,

@@ -185,6 +185,14 @@ impl Controller {
         self.arm_dismiss();
     }
 
+    fn control_playback_mode(self: &Rc<Self>, action: Action) {
+        if let (Some(service), Some(id)) = (&*self.service.borrow(), self.latest.borrow().selected)
+        {
+            service.control_selected(action, id);
+        }
+        self.arm_dismiss();
+    }
+
     fn begin_seek(&self) {
         let snapshot = self.latest.borrow();
         self.seek_target.set(
@@ -741,6 +749,18 @@ fn run_with_launch(
         }
     });
     let weak = Rc::downgrade(&controller);
+    controller.flyout.on_toggle_shuffle(move || {
+        if let Some(controller) = weak.upgrade() {
+            controller.control_playback_mode(Action::ToggleShuffle);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
+    controller.flyout.on_cycle_repeat(move || {
+        if let Some(controller) = weak.upgrade() {
+            controller.control_playback_mode(Action::CycleRepeat);
+        }
+    });
+    let weak = Rc::downgrade(&controller);
     controller.flyout.on_select_session(move |index| {
         if let Some(controller) = weak.upgrade() {
             controller.select(index);
@@ -948,5 +968,13 @@ fn present(flyout: &Flyout, snapshot: &Snapshot) {
     flyout.set_can_toggle(snapshot.controls.play_pause);
     flyout.set_can_previous(snapshot.controls.previous);
     flyout.set_can_next(snapshot.controls.next);
+    flyout.set_can_shuffle(snapshot.controls.shuffle.is_some());
+    flyout.set_shuffling(snapshot.controls.shuffle == Some(true));
+    flyout.set_repeat_mode(match snapshot.controls.repeat {
+        None => RepeatState::Unavailable,
+        Some(media::RepeatMode::Off) => RepeatState::Off,
+        Some(media::RepeatMode::All) => RepeatState::All,
+        Some(media::RepeatMode::One) => RepeatState::One,
+    });
     flyout.set_status(snapshot.status.as_deref().unwrap_or_default().into());
 }

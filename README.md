@@ -22,6 +22,7 @@ No account connection or Spotify Web API is required.
 - Playback controls can follow the dominant cover colour, use neutral grey, or use a custom hex colour.
 - Open **Lyrics** beside the source selector to follow the current track.
 - Previous, play/pause, next, and click/drag seeking that follow the player's capabilities.
+- Shuffle and repeat appear for players that expose those controls and their state to Windows. Repeat cycles through off, all, and one.
 - Automatic selection of playing media, manual session switching, and saved app preferences.
 - Dark, light, and system themes; rounded corners; short optional transitions.
 - Configurable shortcuts, screen position, monitor, margin, and dismissal behavior.

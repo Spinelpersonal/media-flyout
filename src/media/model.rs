@@ -12,6 +12,15 @@ pub struct Controls {
     pub previous: bool,
     pub next: bool,
     pub seek: bool,
+    pub shuffle: Option<bool>,
+    pub repeat: Option<RepeatMode>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepeatMode {
+    Off,
+    All,
+    One,
 }
 
 #[derive(Clone, Debug, Default)]

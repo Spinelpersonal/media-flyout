@@ -250,3 +250,48 @@ fn progress_click_drag_edges_cancellation_and_disabled_player() {
     );
     assert_eq!(previews.borrow().last(), Some(&0.75));
 }
+
+#[test]
+fn shuffle_and_repeat_can_appear_and_disappear_independently() {
+    use media_flyout::ui::RepeatState;
+    use std::cell::Cell;
+
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    slint::platform::set_platform(Box::new(Headless(window.clone()))).unwrap();
+    let flyout = Flyout::new().unwrap();
+    flyout.window().set_size(PhysicalSize::new(452, 196));
+    flyout.show().unwrap();
+    let shuffle = Rc::new(Cell::new(0));
+    let count = shuffle.clone();
+    flyout.on_toggle_shuffle(move || count.set(count.get() + 1));
+    let repeat = Rc::new(Cell::new(0));
+    let count = repeat.clone();
+    flyout.on_cycle_repeat(move || count.set(count.get() + 1));
+
+    let click = |x| {
+        let position = LogicalPosition::new(x, 153.0);
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+    };
+    click(136.0);
+    click(286.0);
+    assert_eq!((shuffle.get(), repeat.get()), (0, 0));
+
+    flyout.set_can_shuffle(true);
+    flyout.set_repeat_mode(RepeatState::One);
+    click(136.0);
+    click(286.0);
+    assert_eq!((shuffle.get(), repeat.get()), (1, 1));
+
+    flyout.set_can_shuffle(false);
+    click(136.0);
+    click(272.0);
+    assert_eq!((shuffle.get(), repeat.get()), (1, 2));
+
+    flyout.set_can_shuffle(true);
+    flyout.set_repeat_mode(RepeatState::Unavailable);
+    click(150.0);
+    click(286.0);
+    assert_eq!((shuffle.get(), repeat.get()), (2, 2));
+}

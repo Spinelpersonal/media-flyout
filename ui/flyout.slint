@@ -59,6 +59,28 @@ component TransportButton inherits ActionButton {
     }
 }
 
+component PlaybackModeButton inherits ActionButton {
+    in property <string> glyph;
+    in property <bool> active;
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    background: active ? Palette.accent : self.pressed ? Palette.pressed : self.hovered ? Palette.hover : transparent;
+    border-color: active ? Palette.on-accent : Palette.text;
+    accessible-checkable: true;
+    accessible-checked: active;
+    Text {
+        text: root.glyph;
+        font-family: "Segoe MDL2 Assets";
+        font-size: 14px;
+        color: root.active ? Palette.on-accent : Palette.accent-text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export enum RepeatState { unavailable, off, all, one }
+
 export component Flyout inherits Window {
     title: "Media Flyout";
     width: 452px;
@@ -89,6 +111,12 @@ export component Flyout inherits Window {
     in property <bool> can-toggle;
     in property <bool> can-previous;
     in property <bool> can-next;
+    in property <bool> can-shuffle;
+    in property <bool> shuffling;
+    in property <RepeatState> repeat-mode;
+    private property <bool> has-playback-modes: can-shuffle || repeat-mode != RepeatState.unavailable;
+    callback toggle-shuffle;
+    callback cycle-repeat;
     in property <bool> has-timeline;
     in property <bool> can-seek;
     in property <bool> volume-available;
@@ -261,12 +289,29 @@ export component Flyout inherits Window {
             horizontal-alignment: right;
         }
         HorizontalLayout {
-            x: 146px; y: 131px; width: 142px; height: 44px;
-            spacing: 10px;
+            x: root.has-playback-modes ? 122px : 146px;
+            y: 131px;
+            width: root.has-playback-modes ? 178px : 142px;
+            height: 44px;
+            spacing: root.has-playback-modes ? 2px : 10px;
             alignment: center;
+            if root.can-shuffle: PlaybackModeButton {
+                keyboard: root.keyboard-mode;
+                glyph: "\u{e8b1}";
+                label: "Shuffle";
+                active: root.shuffling;
+                clicked => { root.toggle-shuffle(); }
+            }
             TransportButton { keyboard: root.keyboard-mode; glyph: "\u{e892}"; label: "Previous track"; enabled: root.can-previous; clicked => { root.previous(); } }
             TransportButton { keyboard: root.keyboard-mode; glyph: root.playing ? "\u{e769}" : "\u{e768}"; label: root.playing ? "Pause" : "Play"; primary: true; enabled: root.can-toggle; clicked => { root.toggle-playback(); } }
             TransportButton { keyboard: root.keyboard-mode; glyph: "\u{e893}"; label: "Next track"; enabled: root.can-next; clicked => { root.next(); } }
+            if root.repeat-mode != RepeatState.unavailable: PlaybackModeButton {
+                keyboard: root.keyboard-mode;
+                glyph: root.repeat-mode == RepeatState.one ? "\u{e8ed}" : "\u{e8ee}";
+                label: root.repeat-mode == RepeatState.one ? "Repeat one" : root.repeat-mode == RepeatState.all ? "Repeat all" : "Repeat off";
+                active: root.repeat-mode != RepeatState.off;
+                clicked => { root.cycle-repeat(); }
+            }
         }
         Text {
             x: 20px; y: 143px; width: 106px; height: 16px;

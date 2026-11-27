@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use media_flyout::media::{Action, MediaService, PlaybackState, Snapshot};
+use media_flyout::media::{Action, MediaService, PlaybackState, RepeatMode, Snapshot};
 use std::{
     sync::mpsc::{self, Receiver},
     time::{Duration, Instant},
@@ -8,8 +8,10 @@ use std::{
 use windows::{
     Foundation::{TimeSpan, TypedEventHandler},
     Media::{
-        MediaPlaybackStatus, MediaPlaybackType, PlaybackPositionChangeRequestedEventArgs,
-        SystemMediaTransportControls as Controls, SystemMediaTransportControlsButton as Button,
+        AutoRepeatModeChangeRequestedEventArgs, MediaPlaybackAutoRepeatMode, MediaPlaybackStatus,
+        MediaPlaybackType, PlaybackPositionChangeRequestedEventArgs,
+        ShuffleEnabledChangeRequestedEventArgs, SystemMediaTransportControls as Controls,
+        SystemMediaTransportControlsButton as Button,
         SystemMediaTransportControlsButtonPressedEventArgs,
         SystemMediaTransportControlsTimelineProperties,
     },
@@ -198,6 +200,34 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
         SetCurrentProcessExplicitAppUserModelID(w!("MediaFlyout.TestPublisher"))?;
     }
     let publisher = Publisher::new()?;
+    let native = publisher.controls.clone();
+    let shuffle_token = publisher
+        .controls
+        .ShuffleEnabledChangeRequested(&TypedEventHandler::<
+            Controls,
+            ShuffleEnabledChangeRequestedEventArgs,
+        >::new(move |_, args| {
+            if let Some(args) = args.as_ref() {
+                native.SetShuffleEnabled(args.RequestedShuffleEnabled()?)?;
+            }
+            Ok(())
+        }))?;
+    let native = publisher.controls.clone();
+    let repeat_token = publisher
+        .controls
+        .AutoRepeatModeChangeRequested(&TypedEventHandler::<
+            Controls,
+            AutoRepeatModeChangeRequestedEventArgs,
+        >::new(move |_, args| {
+            if let Some(args) = args.as_ref() {
+                native.SetAutoRepeatMode(args.RequestedAutoRepeatMode()?)?;
+            }
+            Ok(())
+        }))?;
+    publisher.controls.SetShuffleEnabled(false)?;
+    publisher
+        .controls
+        .SetAutoRepeatMode(MediaPlaybackAutoRepeatMode::None)?;
     let (sender, receiver) = mpsc::channel();
     let service = MediaService::start(move |snapshot| {
         let _ = sender.send(snapshot);
@@ -234,6 +264,28 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
         "missing artwork is normal"
     );
     assert!(snapshot.controls.play_pause && snapshot.controls.previous && snapshot.controls.next);
+    assert_eq!(snapshot.controls.shuffle, Some(false));
+    assert_eq!(snapshot.controls.repeat, Some(RepeatMode::Off));
+    service.control(Action::ToggleShuffle);
+    receive(&receiver, |s| {
+        s.selected == Some(id) && s.controls.shuffle == Some(true)
+    });
+    publisher.controls.SetShuffleEnabled(false)?;
+    receive(&receiver, |s| {
+        s.selected == Some(id) && s.controls.shuffle == Some(false)
+    });
+    for expected in [RepeatMode::All, RepeatMode::One, RepeatMode::Off] {
+        service.control(Action::CycleRepeat);
+        receive(&receiver, |s| {
+            s.selected == Some(id) && s.controls.repeat == Some(expected)
+        });
+    }
+    publisher
+        .controls
+        .RemoveShuffleEnabledChangeRequested(shuffle_token)?;
+    publisher
+        .controls
+        .RemoveAutoRepeatModeChangeRequested(repeat_token)?;
     assert_eq!(
         snapshot.timeline.as_ref().expect("timeline").duration,
         Duration::from_secs(180)
@@ -363,9 +415,11 @@ fn real_gsmtc_events_controls_metadata_timeline_and_disappearance() -> Result<()
         .expect("second session")
         .id;
     service.select(Some(second_id));
-    receive(&receiver, |s| {
+    let secondary_snapshot = receive(&receiver, |s| {
         s.selected == Some(second_id) && s.track.title == "Second window session"
     });
+    assert_eq!(secondary_snapshot.controls.shuffle, None);
+    assert_eq!(secondary_snapshot.controls.repeat, None);
     service.seek(id, changed.track_revision, 0.5);
     service.control(Action::Next);
     assert_eq!(
