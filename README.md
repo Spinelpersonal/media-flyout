@@ -119,6 +119,14 @@ Open **Lyrics** while a player is reporting a title and artist. The flyout stays
 
 While the panel is open, Media Flyout looks up the current recording on [LRCLIB](https://lrclib.net) using its title and artist, with album and duration used for matching when available. Matching word-synced lyrics highlight the current word. Line-synced lyrics show the current and upcoming lines. Plain lyrics scroll, including when the player supplies no usable playback clock. Recent results stay in memory for ten minutes.
 
+### Listening history
+
+Recording is off by default. In **Open settings**, enable **Record local listening history** and choose **Save**. Media Flyout uses Windows media events to record each playing session with a track title, including when the flyout is hidden. Listening time excludes pauses and time the PC spends asleep. Seeking leaves the listening time intact.
+
+Right-click the tray icon and choose **Listening history** to see the newest listens first. Search by track, artist or player and choose a time period. **Export CSV** saves all matching listens across pages. The panel shows start times in local time and the CSV uses UTC. **Clear history** asks for confirmation and removes all entries. Turning recording off keeps existing entries available.
+
+History is stored on this PC in `%LOCALAPPDATA%\MediaFlyout\history.sqlite3`.
+
 ### Preferences
 
 Right-click the tray icon and choose **Open settings**. Choose **Save** to apply your changes immediately. Preferences are stored in `%APPDATA%\MediaFlyout\config.toml`.
@@ -143,6 +151,7 @@ custom_control_color = "#99A0A5"
 animations = true
 show_progress = true
 show_visualizer = false
+listening_history = false
 dismiss_after_seconds = 10
 dismiss_on_outside_click = true
 autostart = false

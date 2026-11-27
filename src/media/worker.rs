@@ -21,6 +21,7 @@ use windows::{
 use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
 
 use super::{Controls, PlaybackState, SessionInfo, Snapshot, Timeline, Track, select_session};
+use crate::history::History;
 
 const TOPOLOGY: u8 = 1;
 const DATA: u8 = 2;
@@ -77,6 +78,14 @@ impl MediaService {
         preferred: Option<String>,
         on_snapshot: impl Fn(Snapshot) + Send + 'static,
     ) -> std::io::Result<Self> {
+        Self::with_history(preferred, None, on_snapshot)
+    }
+
+    pub(crate) fn with_history(
+        preferred: Option<String>,
+        history: Option<Arc<History>>,
+        on_snapshot: impl Fn(Snapshot) + Send + 'static,
+    ) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::sync_channel(16);
         let notifier = Notifier {
             sender,
@@ -84,7 +93,13 @@ impl MediaService {
         };
         let worker_notifier = notifier.clone();
         let thread = thread::Builder::new().name("media".into()).spawn(move || {
-            if let Err(error) = run(receiver, worker_notifier, preferred, &on_snapshot) {
+            if let Err(error) = run(
+                receiver,
+                worker_notifier,
+                preferred,
+                history.as_deref(),
+                &on_snapshot,
+            ) {
                 on_snapshot(Snapshot {
                     status: Some(format!("Media service unavailable: {error}")),
                     ..Snapshot::default()
@@ -288,6 +303,20 @@ impl WatchedSession {
             Ok(Status::Paused) => PlaybackState::Paused,
             _ => PlaybackState::Stopped,
         }
+    }
+
+    fn refresh_track(&mut self) -> Result<()> {
+        if !self.dirty.swap(false, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.revision = self.revision.wrapping_add(1);
+        if let Err(error) = self.read_track() {
+            self.track = Track::default();
+            self.thumbnail = None;
+            self.dirty.store(true, Ordering::Release);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn read_track(&mut self) -> Result<()> {
@@ -609,14 +638,8 @@ fn snapshot(
             .timeline
             .as_ref()
             .is_some_and(|t| t.seek_ticks(0.0).is_some());
-        if session.dirty.swap(false, Ordering::AcqRel) {
-            session.revision = session.revision.wrapping_add(1);
-            if let Err(error) = session.read_track() {
-                session.track = Track::default();
-                session.thumbnail = None;
-                session.dirty.store(true, Ordering::Release);
-                snapshot.status = Some(format!("Metadata unavailable: {error}"));
-            }
+        if let Err(error) = session.refresh_track() {
+            snapshot.status = Some(format!("Metadata unavailable: {error}"));
         }
         snapshot.track = session.track.clone();
         snapshot.track_revision = session.revision;
@@ -642,6 +665,7 @@ fn run(
     receiver: Receiver<Command>,
     notifier: Notifier,
     mut preferred: Option<String>,
+    history: Option<&History>,
     on_snapshot: &impl Fn(Snapshot),
 ) -> Result<()> {
     let _apartment = Apartment::new()?;
@@ -680,7 +704,24 @@ fn run(
             ..Snapshot::default()
         }
     };
-    on_snapshot(last.clone());
+    let publish = |snapshot: &mut Snapshot, sessions: &mut [WatchedSession]| {
+        if let Some(history) = history.filter(|h| h.enabled()) {
+            for (info, session) in snapshot.sessions.iter().zip(sessions.iter_mut()) {
+                if Some(info.id) != snapshot.selected && info.state == PlaybackState::Playing {
+                    let _ = session.refresh_track();
+                }
+            }
+            let observed = snapshot
+                .sessions
+                .iter()
+                .zip(sessions.iter().map(|s| &s.track));
+            if let Err(error) = history.observe(observed) {
+                snapshot.status = Some(format!("Cannot record listening history: {error}"));
+            }
+        }
+        on_snapshot(snapshot.clone());
+    };
+    publish(&mut last, &mut sessions);
     while let Ok(command) = receiver.recv() {
         let mut status = None;
         match command {
@@ -753,12 +794,18 @@ fn run(
                     )),
                     ..Snapshot::default()
                 };
-                on_snapshot(last.clone());
+                publish(&mut last, &mut sessions);
                 continue;
             }
         }
         let Some(events) = &events else {
-            on_snapshot(last.clone());
+            last = Snapshot {
+                status: Some(
+                    "Windows media service is unavailable. Reopen the flyout to retry.".into(),
+                ),
+                ..Snapshot::default()
+            };
+            publish(&mut last, &mut sessions);
             continue;
         };
         if let Some(result) = decoded.lock().unwrap_or_else(|p| p.into_inner()).take()
@@ -776,7 +823,7 @@ fn run(
             manual,
             artwork.as_ref(),
         );
-        on_snapshot(last.clone());
+        publish(&mut last, &mut sessions);
     }
     Ok(())
 }

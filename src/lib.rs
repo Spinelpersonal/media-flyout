@@ -1,4 +1,5 @@
 pub mod config;
+mod history;
 pub mod hotkey;
 mod lyrics;
 pub mod media;

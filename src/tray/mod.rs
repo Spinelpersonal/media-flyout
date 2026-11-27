@@ -15,6 +15,7 @@ pub enum MenuAction {
     Toggle,
     Exit,
     OpenConfig,
+    History,
     Reload,
     Autostart,
     Remember,
@@ -118,6 +119,7 @@ impl TrayIcon {
             let menu = CreatePopupMenu().ok()?;
             let result = (|| {
                 AppendMenuW(menu, MF_STRING, 1, w!("Show / hide flyout"))?;
+                AppendMenuW(menu, MF_STRING, 8, w!("Listening history"))?;
                 AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())?;
                 AppendMenuW(menu, MF_STRING, 3, w!("Open settings"))?;
                 AppendMenuW(menu, MF_STRING, 4, w!("Reload settings"))?;
@@ -172,6 +174,7 @@ impl TrayIcon {
                     5 => Some(MenuAction::Autostart),
                     6 => Some(MenuAction::Remember),
                     7 => Some(MenuAction::Automatic),
+                    8 => Some(MenuAction::History),
                     _ => None,
                 })
             })();

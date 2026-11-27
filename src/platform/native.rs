@@ -188,6 +188,7 @@ impl Platform for Backend {
                 slint::platform::update_timers_and_animations();
                 if super::welcome::handle_message(&message)
                     || super::settings_dialog::handle_message(&message)
+                    || super::history_dialog::handle_message(&message)
                 {
                     continue;
                 }

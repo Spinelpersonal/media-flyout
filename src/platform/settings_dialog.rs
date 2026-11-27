@@ -148,6 +148,11 @@ fn fields(s: &Settings) -> Vec<Field> {
             Check(s.show_visualizer),
         ),
         Field("autostart", "Start with Windows", Check(s.autostart)),
+        Field(
+            "listening_history",
+            "Record local listening history",
+            Check(s.listening_history),
+        ),
     ]
 }
 

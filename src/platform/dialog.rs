@@ -16,6 +16,16 @@ impl Template {
         self.0.extend([n as u16, (n >> 16) as u16]);
     }
     pub(super) fn item(&mut self, id: u16, class: u16, text: &str, rect: [u16; 4], style: u32) {
+        self.item_with_class(id, [0xffff, class], text, rect, style);
+    }
+    pub(super) fn item_with_class(
+        &mut self,
+        id: u16,
+        class: impl IntoIterator<Item = u16>,
+        text: &str,
+        rect: [u16; 4],
+        style: u32,
+    ) {
         if self.0.len() % 2 == 1 {
             self.0.push(0);
         }
@@ -23,7 +33,8 @@ impl Template {
         self.dword(WS_CHILD.0 | WS_VISIBLE.0 | style);
         self.dword(0);
         self.0.extend(rect);
-        self.0.extend([id, 0xffff, class]);
+        self.0.push(id);
+        self.0.extend(class);
         self.string(text);
         self.0.push(0);
     }

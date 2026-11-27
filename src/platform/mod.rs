@@ -1,5 +1,6 @@
 mod dialog;
 mod geometry;
+mod history_dialog;
 mod instance;
 mod native;
 mod settings;
@@ -7,6 +8,7 @@ mod settings_dialog;
 mod source;
 mod welcome;
 
+pub(crate) use history_dialog::{open_history, refresh_history};
 pub(crate) use instance::activate_existing;
 pub use instance::{Instance, request_exit, request_reload};
 pub use native::{BackendState, NativeEvent, NativeWindow, initialize};

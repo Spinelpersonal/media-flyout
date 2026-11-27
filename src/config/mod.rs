@@ -81,6 +81,7 @@ pub struct Settings {
     pub animations: bool,
     pub show_progress: bool,
     pub show_visualizer: bool,
+    pub listening_history: bool,
     pub dismiss_after_seconds: u16,
     pub dismiss_on_outside_click: bool,
 }
@@ -101,6 +102,7 @@ impl Default for Settings {
             animations: true,
             show_progress: true,
             show_visualizer: false,
+            listening_history: false,
             dismiss_after_seconds: 10,
             dismiss_on_outside_click: true,
         }
@@ -328,6 +330,10 @@ fn parse(document: &DocumentMut) -> (Settings, Vec<String>) {
                 .map(|b| settings.remember_preferred_app = b)
                 .is_some(),
             "autostart" => value.as_bool().map(|b| settings.autostart = b).is_some(),
+            "listening_history" => value
+                .as_bool()
+                .map(|b| settings.listening_history = b)
+                .is_some(),
             "animations" => value.as_bool().map(|b| settings.animations = b).is_some(),
             "show_progress" => value
                 .as_bool()
@@ -362,6 +368,9 @@ mod tests {
         assert_eq!(settings, Settings::default());
         assert!(warnings.is_empty());
         assert!(!settings.autostart);
+        assert!(!settings.listening_history);
+        let (enabled, warnings) = parse(&"listening_history = true".parse().unwrap());
+        assert!(warnings.is_empty() && enabled.listening_history);
         assert!(!settings.show_visualizer);
         let (enabled, warnings) = parse(&"show_visualizer = true".parse().unwrap());
         assert!(warnings.is_empty() && enabled.show_visualizer);

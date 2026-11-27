@@ -22,6 +22,8 @@ animations = true
 show_progress = true
 # Show a spectrum of the default Windows audio output while the flyout is visible.
 show_visualizer = false
+# Keep a local listening history for the tray's Listening history panel.
+listening_history = false
 
 # Set to 0 to keep the flyout open until explicitly dismissed.
 dismiss_after_seconds = 10

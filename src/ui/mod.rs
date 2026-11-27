@@ -10,6 +10,7 @@ use slint::{ComponentHandle, Model};
 
 use crate::{
     config::{ConfigStore, Theme},
+    history::History,
     hotkey::RegisteredHotkey,
     media::{self, Action, Artwork, PlaybackState, Snapshot},
     platform::{self, NativeEvent, NativeWindow},
@@ -37,6 +38,7 @@ enum Launch {
 }
 
 struct Controller {
+    history: Arc<History>,
     flyout: Flyout,
     native: Rc<NativeWindow>,
     service: RefCell<Option<media::MediaService>>,
@@ -320,6 +322,11 @@ impl Controller {
         let path = store.path.clone();
         *self.warnings.borrow_mut() = store.warnings.clone();
         drop(store);
+        if let Err(error) = self.history.set_enabled(settings.listening_history) {
+            self.warnings
+                .borrow_mut()
+                .push(format!("Listening history: {error}"));
+        }
         if let Ok(shortcut) = settings.shortcut.parse() {
             let needs_registration = self
                 .hotkey
@@ -379,6 +386,12 @@ impl Controller {
             MenuAction::Toggle => self.toggle(),
             MenuAction::Exit => self.native_event(NativeEvent::Exit),
             MenuAction::Reload => self.reload(),
+            MenuAction::History => {
+                if let Err(error) = platform::open_history(self.history.clone()) {
+                    self.tray
+                        .notify(&format!("Cannot open listening history: {error}"));
+                }
+            }
             MenuAction::OpenConfig => {
                 let weak = Rc::downgrade(self);
                 let settings = self.config.borrow().settings.clone();
@@ -455,6 +468,7 @@ impl Controller {
     }
 
     fn update(self: &Rc<Self>, snapshot: Snapshot) {
+        platform::refresh_history();
         if self.seek_target.get().is_some_and(|(id, revision)| {
             snapshot.selected != Some(id)
                 || snapshot.track_revision != revision
@@ -634,6 +648,7 @@ fn run_with_launch(
     let tray = TrayIcon::new(native.handle())?;
     let config = ConfigStore::load(config_path)?;
     let controller = Rc::new(Controller {
+        history: Arc::new(History::local()),
         flyout,
         native,
         service: RefCell::new(None),
@@ -781,20 +796,24 @@ fn run_with_launch(
     });
     let weak = controller.flyout.as_weak();
     let preferred = controller.config.borrow().settings.preferred_app.clone();
-    let service = media::MediaService::with_preference(preferred, move |snapshot| {
-        let should_schedule = mailbox
-            .lock()
-            .map(|mut slot| slot.replace(snapshot).is_none())
-            .unwrap_or(false);
-        if should_schedule {
-            let weak = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(flyout) = weak.upgrade() {
-                    flyout.invoke_media_updated();
-                }
-            });
-        }
-    })?;
+    let service = media::MediaService::with_history(
+        preferred,
+        (!matches!(launch, Launch::Preview(_))).then(|| controller.history.clone()),
+        move |snapshot| {
+            let should_schedule = mailbox
+                .lock()
+                .map(|mut slot| slot.replace(snapshot).is_none())
+                .unwrap_or(false);
+            if should_schedule {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(flyout) = weak.upgrade() {
+                        flyout.invoke_media_updated();
+                    }
+                });
+            }
+        },
+    )?;
     *controller.service.borrow_mut() = Some(service);
     slint::platform::update_timers_and_animations();
     match launch {
@@ -824,10 +843,12 @@ fn run_with_launch(
             },
         );
     }
-    slint::run_event_loop_until_quit()?;
+    let event_loop_result = slint::run_event_loop_until_quit();
     controller.hide();
     controller.native.finish_transition();
+    controller.history.set_enabled(false)?;
     controller.service.borrow_mut().take();
+    event_loop_result?;
     std::mem::replace(&mut *preview_result.borrow_mut(), Ok(()))?;
     Ok(())
 }
